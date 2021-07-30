@@ -88,12 +88,13 @@ module Make_stat (Store : Irmin.KV) = struct
           assert (l <> []) (* At least one newie *);
           l
       in
+      let btree_v = Btree.Index.Stats.get () in
       Def.
         {
-          bytes_read = v.bytes_read;
-          nb_reads = v.nb_reads;
-          bytes_written = v.bytes_written;
-          nb_writes = v.nb_writes;
+          bytes_read = v.bytes_read + btree_v.bytes_read ;
+          nb_reads = v.nb_reads + btree_v.nb_reads;
+          bytes_written = v.bytes_written + btree_v.bytes_written;
+          nb_writes = v.nb_writes + btree_v.nb_writes;
           nb_merge = v.nb_merge;
           new_merge_durations;
         }

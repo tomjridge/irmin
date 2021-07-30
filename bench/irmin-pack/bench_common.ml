@@ -45,7 +45,8 @@ let setup_log style_renderer level =
 
 let reset_stats () =
   Index.Stats.reset_stats ();
-  Irmin_pack.Stats.reset_stats ()
+  Irmin_pack.Stats.reset_stats ();
+  Btree.Index.Stats.reset_stats ()
 
 let random_char () = char_of_int (Random.int 256)
 let random_string n = String.init n (fun _i -> random_char ())
