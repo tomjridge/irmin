@@ -343,6 +343,11 @@ module Make (Store : Store) = struct
     in
     aux commit_seq 0
 
+  let get_maxrss () =
+    let usage = Rusage.(get Self) in
+    let ( / ) = Int64.div in
+    Int64.to_int (usage.maxrss / 1024L / 1024L)
+
   let run ext_config config =
     let check_hash =
       config.path_conversion = `None
@@ -374,6 +379,7 @@ module Make (Store : Store) = struct
         }
     in
     let stats = Stat_collector.create_file stat_path c config.store_dir in
+    let maxrss = get_maxrss () in
     let+ summary_opt =
       Lwt.finalize
         (fun () ->
@@ -381,7 +387,7 @@ module Make (Store : Store) = struct
             add_commits repo config.ncommits_trace commit_seq on_commit on_end
               stats check_hash config.empty_blobs
           in
-          Logs.app (fun l -> l "Closing repo...");
+          Logs.app (fun l -> l "Closing repo, with maxrss = %d" maxrss);
           let+ () = Store.Repo.close repo in
           Stat_collector.close stats;
           if not config.no_summary then (
