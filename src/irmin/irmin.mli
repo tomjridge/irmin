@@ -44,9 +44,13 @@ module Type = Repr
     {{:https://github.com/mirage/irmin/blob/master/README_PPX.md} documentation
     for [ppx_irmin]})*)
 
+(* Info is just a commit object *)
+
 module Info = Info
 (** Commit info are used to keep track of the origin of write operations in the
     stores. [Info] models the metadata associated with commit objects in Git. *)
+
+
 
 module Merge = Merge
 (** [Merge] provides functions to build custom 3-way merge operators for various
@@ -120,7 +124,7 @@ module Contents = Contents
     {{!Contents.Json} JSON} contents are provided. *)
 
 module Branch = Branch
-module Node = Node
+module Node = Node  (* A node is like a tree object? *)
 module Commit = Commit
 
 type remote = Remote.t = ..

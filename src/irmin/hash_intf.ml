@@ -20,6 +20,8 @@ module type S = sig
   type t
   (** The type for digest hashes. *)
 
+  (* ??? following function has a fancy type; what does it mean? *)
+
   val hash : ((string -> unit) -> unit) -> t
   (** Compute a deterministic store key from a sequence of strings. *)
 

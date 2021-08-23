@@ -27,6 +27,9 @@ module type S = sig
   include Read_only.S
   (** @inline *)
 
+
+  (* NOTE the value has an implicit key associated with it *)
+
   val add : [> write ] t -> value -> key Lwt.t
   (** Write the contents of a value to the store. It's the responsibility of the
       content-addressable store to generate a consistent key. *)
@@ -35,6 +38,9 @@ module type S = sig
   (** Same as {!add} but allows to specify the key directly. The backend might
       choose to discared that key and/or can be corrupt if the key scheme is not
       consistent. *)
+
+  (* NOTE rather unsafe! *)
+
 
   include Clearable with type 'a t := 'a t
   (** @inline *)

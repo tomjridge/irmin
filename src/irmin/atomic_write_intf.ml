@@ -27,6 +27,7 @@ module type S = sig
   type t
   (** The type for atomic-write backend stores. *)
 
+  (* NOTE include Read_only, so the add operation from Append_only is not present *)
   include Read_only.S with type _ t := t
   (** @inline *)
 
@@ -47,8 +48,12 @@ module type S = sig
   val remove : t -> key -> unit Lwt.t
   (** [remove t k] remove the key [k] in [t]. *)
 
+  (* FIXME why is list here, rather than, say, in Read_only ? *)
+
   val list : t -> key list Lwt.t
   (** [list t] it the list of keys in [t]. *)
+
+  (* NOTE watches are built into the interface *)
 
   type watch
   (** The type of watch handlers. *)

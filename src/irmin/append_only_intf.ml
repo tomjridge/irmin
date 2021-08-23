@@ -26,6 +26,8 @@ module type S = sig
   include Read_only.S
   (** @inline *)
 
+  (* FIXME what is the semantics if the key already has a value? *)
+
   val add : [> write ] t -> key -> value -> unit Lwt.t
   (** Write the contents of a value to the store. *)
 

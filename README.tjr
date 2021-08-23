@@ -1,0 +1,10 @@
+initial comments; diff against master ancestor to see them
+
+git diff b9849102b..HEAD
+
+What is 
+irmin-chunk?
+irmin-layers?
+irmin-test?
+
+irmin-unix vs irmin-fs?

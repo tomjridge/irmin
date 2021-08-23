@@ -14,6 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
+(* Similar to a list of strings presumably *)
+
 module type S = sig
   (** {1 Path} *)
 

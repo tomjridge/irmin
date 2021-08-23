@@ -19,6 +19,10 @@ open! Import
 module type S = sig
   (** {1 Signature for store contents} *)
 
+
+  (* NOTE the "deriving irmin" produces a type repr for t; but this
+     doesn't provide serialization.... or does it? *)
+
   type t [@@deriving irmin]
   (** The type for user-defined contents. *)
 
