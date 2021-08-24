@@ -27,3 +27,12 @@ clean:
 
 doc:
 	dune build @doc
+
+
+tree:=dune exec -- ./bench/irmin-pack/tree.exe
+
+tom_s:
+	$(tree) --mode=trace --ncommits-trace=10 --keep-stat-trace data4_10310commits.repr
+
+tom_m:
+	$(tree) --mode=trace --ncommits-trace=10 --keep-stat-trace data4_100066commits.repr

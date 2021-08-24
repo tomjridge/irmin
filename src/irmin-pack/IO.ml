@@ -136,7 +136,7 @@ module Unix : S = struct
 
   let raw ~flags ~version ~offset ~generation file =
     let x = Unix.openfile file flags 0o644 in
-    let raw = Raw.v x in
+    let raw = Raw.v ~readonly:false (* FIXME not sure - should pass an arg to this function? *) x in
     let header =
       { Raw.Header.version = Version.to_bin version; offset; generation }
     in
@@ -214,7 +214,7 @@ module Unix : S = struct
         v ~offset:Int63.zero ~version ~generation:Int63.zero raw
     | true -> (
         let x = Unix.openfile file Unix.[ O_EXCL; mode; O_CLOEXEC ] 0o644 in
-        let raw = Raw.v x in
+        let raw = Raw.v ~readonly x in
         if fresh then (
           let version = get_version () in
           let header =
