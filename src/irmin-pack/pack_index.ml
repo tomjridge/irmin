@@ -17,6 +17,9 @@
 open! Import
 include Pack_index_intf
 
+[@@@warning "-27-32"]
+  
+
 module Make (K : Irmin.Hash.S) = struct
   module Key = struct
     type t = K.t
@@ -31,6 +34,8 @@ module Make (K : Irmin.Hash.S) = struct
       let _, v = decode_bin s off in
       v
   end
+
+  type key = Key.t
 
   module Val = struct
     type t = int63 * int * Pack_value.Kind.t [@@deriving irmin]
@@ -47,19 +52,69 @@ module Make (K : Irmin.Hash.S) = struct
     let encoded_size = (64 / 8) + (32 / 8) + 1
   end
 
+  type value = Val.t
+
   module Btree_stats = Btree.Index.Stats
   module Index_stats = Index.Stats
 
-  module Index = Btree.Index.Make (Key) (Val) 
-  include Index
+  (* module Index = Btree.Index.Make (Key) (Val)  *)
+  (* include Index *)
+
+  module Limits = struct
+    let max_k_size = 30
+    let max_v_size = 8 + 4 + 2
+  end
+  open Limits
+
+  module Btree_ = Mini_btree.Examples.Example_string_string_mmap(Limits)
+
+  type t = Btree_.t
 
   (** Implicit caching of Index instances. TODO: Require the user to pass Pack
       instance caches explicitly. See
       https://github.com/mirage/irmin/issues/1017. *)
-  let cache = Index.empty_cache ()
+  (* let cache = Index.empty_cache () *)
 
-  let v = Index.v ~cache
-  let add ?overcommit t k v = replace ?overcommit t k v
-  let find t k = match find t k with exception Not_found -> None | h -> Some h
-  let close t = Index.close t
+  let lwt_run_in_main : (unit -> 'a Lwt.t) -> 'a = fun f -> failwith "lwt_run_in_main"
+
+  (* let lwt_run_in_main : (unit -> 'a Lwt.t) -> 'a = Lwt_preemptive.run_in_main *)
+
+  let v :
+    ?flush_callback:(unit -> unit) ->
+    ?fresh:bool ->
+    ?readonly:bool ->
+    ?throttle:[ `Block_writes | `Overcommit_memory ] ->
+    log_size:int ->
+    string ->
+    t
+    = fun ?flush_callback ?fresh ?readonly ?throttle ~log_size fn ->
+      (fun () -> Btree_.create ~fn) |> lwt_run_in_main
+
+
+  let find t k = 
+    (* FIXME what is the difference between encode and to_bin_string? *)
+    k |> Key.encode |> fun k -> 
+    assert(String.length k < max_k_size);
+    (fun () -> Btree_.find t k) |> lwt_run_in_main |> fun r ->     
+    r |> Option.map (fun s -> Val.decode s 0)
+
+  let add ?overcommit t k v = 
+    k |> Key.encode |> fun k -> 
+    v |> Val.encode |> fun v -> 
+    (fun () -> Btree_.insert t k v) |> lwt_run_in_main
+
+  let close t = 
+    (fun () -> Btree_.close t) |> lwt_run_in_main
+
+  let merge _t = ()
+  let iter _f _t = failwith __LOC__
+  let clear _t = failwith __LOC__
+  let try_merge _t = ()
+  let flush : ?no_callback:unit -> ?with_fsync:bool -> t -> unit = 
+    fun ?no_callback ?with_fsync _t -> 
+    () (* FIXME add btree.flush *)
+
+  let filter _t _f = failwith __LOC__
+  let mem t k = find t k <> None
+  let sync _t = ()                                    
 end

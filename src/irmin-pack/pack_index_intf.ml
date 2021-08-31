@@ -17,7 +17,9 @@
 open! Import
 
 module type S = sig
-  include Btree.Index.S with type value = int63 * int * Pack_value.Kind.t
+  type t
+  type key
+  type value = int63 * int * Pack_value.Kind.t
 
   val v :
     ?flush_callback:(unit -> unit) ->
@@ -33,6 +35,15 @@ module type S = sig
   val add : ?overcommit:bool -> t -> key -> value -> unit
   val close : t -> unit
   val merge : t -> unit
+
+  (* NOTE following from Btree.Index.S *)
+  val iter : (key -> value -> unit) -> t -> unit
+  val clear : t -> unit
+  val try_merge :  t -> unit
+  val flush : ?no_callback:unit -> ?with_fsync:bool -> t -> unit
+  val filter : t -> (key * value -> bool) -> unit
+  val mem : t -> key -> bool
+  val sync : t -> unit
 
   module Index_stats = Index.Stats
   module Btree_stats = Btree.Index.Stats
