@@ -1,7 +1,7 @@
 .PHONY: all clean test fuzz bench-pack bench-layers bench doc examples
 
 all:
-	dune build
+	dune build ./bench/irmin-pack/tree.exe
 
 test:
 	dune runtest

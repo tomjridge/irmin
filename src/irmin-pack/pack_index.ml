@@ -61,12 +61,12 @@ module Make (K : Irmin.Hash.S) = struct
   (* include Index *)
 
   module Limits = struct
-    let max_k_size = 30
+    (* let max_k_size = 40 (\* FIXME *\) *)
     let max_v_size = 8 + 4 + 2
   end
   open Limits
 
-  module Btree_ = Mini_btree.Examples.Example_string_string_mmap(Limits)
+  module Btree_ = Mini_btree.Examples.Example_int_string_mmap(Limits)
 
   type t = Btree_.t
 
@@ -75,9 +75,25 @@ module Make (K : Irmin.Hash.S) = struct
       https://github.com/mirage/irmin/issues/1017. *)
   (* let cache = Index.empty_cache () *)
 
-  let lwt_run_in_main : (unit -> 'a Lwt.t) -> 'a = fun f -> failwith "lwt_run_in_main"
+  let lwt_run_in_main : (unit -> 'a Mini_btree.M.m) -> 'a = fun f -> f () |> Mini_btree.M.run
 
   (* let lwt_run_in_main : (unit -> 'a Lwt.t) -> 'a = Lwt_preemptive.run_in_main *)
+
+(*
+  (* take a filename, and make parent directories if necessary *)
+  let rec ensure_dir_exists d = 
+    assert(not (Filename.is_relative d)); (* absolute paths *)
+    let exists = try ignore(Unix.stat d); true with _ -> false in
+    match exists with
+    | true -> ()
+    | false -> 
+      let p = Filename.dirname d in
+      ensure_dir_exists p;
+      Unix.mkdir d 0o600;
+      ()    
+
+  let ensure_parent_exists ~fn = ensure_dir_exists (Filename.dirname fn)
+*)
 
   let v :
     ?flush_callback:(unit -> unit) ->
@@ -87,20 +103,37 @@ module Make (K : Irmin.Hash.S) = struct
     log_size:int ->
     string ->
     t
-    = fun ?flush_callback ?fresh ?readonly ?throttle ~log_size fn ->
-      (fun () -> Btree_.create ~fn) |> lwt_run_in_main
-
+    = fun ?flush_callback ?fresh:(fresh=false) ?readonly:(readonly=false) ?throttle ~log_size fn ->
+      Printf.printf "%s: v called with fn %s\n" __LOC__ fn;
+      (* fn is actually the name of a directory .../store; so we store the actual data in btree.t *)
+      let fn = fn ^"/" ^ "btree.t" in
+      ignore(fresh);
+      ignore(readonly);
+      begin fn |> Filename.dirname |> (fun d -> Sys.command ("mkdir -p "^d)) |> fun i -> ignore i end; (* FIXME fragile *) 
+      lwt_run_in_main (fun () -> 
+          Btree_.create ~fn)
+(*
+      (fun () ->          
+         match readonly with 
+         | true -> Btree_.open_ ~fn
+         | false -> (
+             match fresh with 
+             | true -> Btree_.create ~fn
+             | false -> Btree_.open_ ~fn)) |> lwt_run_in_main
+*)
 
   let find t k = 
     (* FIXME what is the difference between encode and to_bin_string? *)
-    k |> Key.encode |> fun k -> 
-    assert(String.length k < max_k_size);
+    k |> Hashtbl.hash |> fun k -> 
+    (* assert(String.length k <= max_k_size); *)
     (fun () -> Btree_.find t k) |> lwt_run_in_main |> fun r ->     
     r |> Option.map (fun s -> Val.decode s 0)
-
+      
   let add ?overcommit t k v = 
-    k |> Key.encode |> fun k -> 
+    k |> Hashtbl.hash |> fun k -> 
     v |> Val.encode |> fun v -> 
+    (* assert(String.length k <= max_k_size); *)
+    assert(String.length v <= max_v_size);
     (fun () -> Btree_.insert t k v) |> lwt_run_in_main
 
   let close t = 
