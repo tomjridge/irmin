@@ -46,6 +46,55 @@ end = struct
       ]
 end
 
+module Hash_stats (Hash : Irmin.Hash.S) = struct
+  let tbl : (Hash.t, int * int) Hashtbl.t = Hashtbl.create 100
+
+  let add (hash : Hash.t) len =
+    match Hashtbl.find_opt tbl hash with
+    | Some (len', x) ->
+        assert (len = len');
+        Hashtbl.replace tbl hash (len, x + 1)
+    | None -> Hashtbl.add tbl hash (len, 1)
+
+  let pp_hash = Irmin.Type.to_string Hash.t
+
+  let print_sorted oc =
+    let m = Hashtbl.fold (fun _ (_, x) m -> max m x) tbl 0 in
+    Fmt.epr "Max nb of occurrences is %d\n%!" m;
+    Progress.(
+      with_reporter
+        (counter ~style:`UTF8 ~message:"Sorting hashes"
+           ~pp:Progress.Units.Bytes.of_int64 (Int64.of_int m)))
+    @@ fun report ->
+    let rec collect_per_occurrence n sizes =
+      report 1L;
+      if n mod 100 = 0 then flush oc;
+      if n <= 0 then sizes
+      else
+        let total_size_n, distinct_elts =
+          Hashtbl.fold
+            (fun hash (len, x) (size, distinct) ->
+              if x = n then (
+                Printf.fprintf oc "%s,%d,%d\n" (pp_hash hash) len x;
+                let size = size + (len * n) in
+                let distinct = succ distinct in
+                (size, distinct))
+              else (size, distinct))
+            tbl (0, 0)
+        in
+        (collect_per_occurrence [@tailcall]) (n - 1)
+          ((n, total_size_n, distinct_elts) :: sizes)
+    in
+    let sizes = collect_per_occurrence m [] in
+    Hashtbl.clear tbl;
+    Printf.fprintf oc "Total size per occurence:\n";
+    flush oc;
+    List.iter
+      (fun (n, size, distinct) ->
+        if size <> 0 then Printf.fprintf oc "%d,%d,%d\n" n size distinct)
+      sizes
+end
+
 module type Args = sig
   module Version : Version.S
   module Hash : Irmin.Hash.S
@@ -60,7 +109,8 @@ module Make (Args : Args) : sig
   val run :
     [ `Reconstruct_index of [ `In_place | `Output of string ]
     | `Check_index
-    | `Check_and_fix_index ] ->
+    | `Check_and_fix_index
+    | `Print_index of Pack_value.Kind.t ] ->
     Irmin.config ->
     unit
 end = struct
@@ -171,6 +221,54 @@ end = struct
       Index.close index
   end
 
+  module Index_printer = struct
+    module Stats = Hash_stats (Args.Hash)
+
+    let equal_kind = function
+      | Pack_value.Kind.Commit, Pack_value.Kind.Commit
+      | Node, Node
+      | Inode, Inode
+      | Contents, Contents ->
+          true
+      | _ -> false
+
+    let string_of_kind c = Pack_value.Kind.to_magic c |> String.make 1
+
+    let create config obj_type =
+      let log_size = Conf.index_log_size config in
+      let file =
+        Filename.concat (Conf.root config)
+          ("logs" ^ "-" ^ string_of_kind obj_type)
+      in
+      if Sys.file_exists file then failwith "file %s already exists";
+
+      [%log.app
+        "Beginning index checking with parameters: { log_size = %d }" log_size];
+      let root = Conf.root config in
+      let index = Index.v ~fresh:false ~readonly:true ~log_size root in
+      index
+
+    let iter_pack_entry obj_type key (_, len, magic) =
+      (*Fmt.epr "%a,%d,%a\n%!" pp_key key len
+        (Irmin.Type.pp Pack_value.Kind.t)
+        magic;*)
+      if equal_kind (obj_type, magic) then Stats.add key len;
+      Ok ()
+
+    let finalise index config obj_type () =
+      [%log.app "Completed indexing of pack entries."];
+
+      let file =
+        Filename.concat (Conf.root config)
+          ("logs" ^ "-" ^ string_of_kind obj_type)
+      in
+      if Sys.file_exists file then failwith "file %s already exists";
+      let oc = open_out file in
+      Stats.print_sorted oc;
+      close_out oc;
+      Index.close index
+  end
+
   let decode_entry_length = function
     | Pack_value.Kind.Contents -> Contents.decode_bin_length
     | Commit -> Commit.decode_bin_length
@@ -181,10 +279,18 @@ end = struct
       (* Decode the key and kind by hand *)
       let off_after_key, key = decode_key buffer buffer_off in
       assert (off_after_key = buffer_off + Hash.hash_size);
+      (* Fmt.epr
+       *   "decode key = %a, buffer_off = %d off_after_key= %d Hash.hash_size = \
+       *    %d buffer_length =%d\n\
+       *    %!"
+       *   pp_key key buffer_off off_after_key Hash.hash_size
+       *   (String.length buffer); *)
       let off_after_kind, kind = decode_kind buffer off_after_key in
       assert (off_after_kind = buffer_off + Hash.hash_size + 1);
+      (* Fmt.epr "decode kind off_after_kind %d\n%!" off_after_kind; *)
       (* Get the length of the entire entry *)
       let entry_len = decode_entry_length kind buffer buffer_off in
+      (* Fmt.epr "decode len %d \n%!" entry_len; *)
       { key; data = (off, entry_len, kind) }
     with
     | Invalid_argument msg when msg = "index out of bounds" ->
@@ -277,6 +383,12 @@ end = struct
           let open Index_check_and_fix in
           let v = create config in
           (iter_pack_entry v, finalise v, "Checking and fixing index")
+      | `Print_index obj_type ->
+          let open Index_printer in
+          let v = create config obj_type in
+          ( iter_pack_entry obj_type,
+            finalise v config obj_type,
+            "Printing index" )
     in
     let run_duration = Mtime_clock.counter () in
     let root = Conf.root config in

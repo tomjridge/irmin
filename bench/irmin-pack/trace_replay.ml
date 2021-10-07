@@ -243,10 +243,11 @@ module Make (Store : Store) = struct
     Stat_collector.short_op_end stats `Mem_tree;
     if b <> b' then error_find "mem_tree" keys b i n (unscope in_ctx_id)
 
-  let check_hash_trace h_trace h_store =
-    let h_store = Irmin.Type.(to_string Store.Hash.t) h_store in
-    if h_trace <> h_store then
-      Fmt.failwith "hash replay %s, hash trace %s" h_store h_trace
+  let check_hash_trace _h_trace _h_store = ()
+  (* let h_store = Irmin.Type.(to_string Store.Hash.t) h_store in
+     if h_trace <> h_store then
+       Fmt.failwith "hash replay %s, hash trace %s" h_store h_trace
+  *)
 
   let exec_commit t stats repo h_trace date message parents_trace in_ctx_id
       check_hash =

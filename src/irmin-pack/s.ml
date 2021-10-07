@@ -81,7 +81,8 @@ module type S = sig
   val traverse_pack_file :
     [ `Reconstruct_index of [ `In_place | `Output of string ]
     | `Check_index
-    | `Check_and_fix_index ] ->
+    | `Check_and_fix_index
+    | `Print_index of Pack_value.Kind.t ] ->
     Irmin.config ->
     unit
 
