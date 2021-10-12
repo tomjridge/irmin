@@ -206,7 +206,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
         let throttle = Conf.Pack.merge_throttle config in
         let f = ref (fun () -> ()) in
         let index =
-          Index.v
+          Index.vFIXME
             ~flush_callback:(fun () -> !f ())
               (* backpatching to add pack flush before an index flush *)
             ~fresh ~readonly ~throttle ~log_size root
@@ -228,7 +228,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
         let throttle = Conf.Pack.merge_throttle config in
         let f = ref (fun () -> ()) in
         let index =
-          Index.v
+          Index.vFIXME
             ~flush_callback:(fun () -> !f ())
             ~fresh ~readonly ~throttle ~log_size root
         in

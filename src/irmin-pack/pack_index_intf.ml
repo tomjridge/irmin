@@ -21,7 +21,7 @@ module type S = sig
   type key
   type value = int63 * int * Pack_value.Kind.t
 
-  val v :
+  val vFIXME :
     ?flush_callback:(unit -> unit) ->
     ?fresh:bool ->
     ?readonly:bool ->

@@ -60,23 +60,18 @@ module Make (K : Irmin.Hash.S) = struct
   (* module Index = Btree.Index.Make (Key) (Val)  *)
   (* include Index *)
 
-  module Limits = struct
-    let max_k_size = 40 (* FIXME *)
-    let max_v_size = 8 + 4 + 2
-  end
-  open Limits
 
-  module Btree_ = Mini_btree.Examples.Example_string_string_mmap(Limits)
-
+  (* module Frontend_ = Kv_hash.Frontend *)
+  module Writer_ = Kv_hash.Frontend.Writer
   (* write through cache, unbounded *)
-  type t = { tree:Btree_.t; cache: (Key.t,Val.t option)Hashtbl.t }
+  type t = Writer_.t
 
   (** Implicit caching of Index instances. TODO: Require the user to pass Pack
       instance caches explicitly. See
       https://github.com/mirage/irmin/issues/1017. *)
   (* let cache = Index.empty_cache () *)
 
-  let v :
+  let vFIXME :
     ?flush_callback:(unit -> unit) ->
     ?fresh:bool ->
     ?readonly:bool ->
@@ -85,16 +80,23 @@ module Make (K : Irmin.Hash.S) = struct
     string ->
     t
     = fun ?flush_callback ?fresh:(fresh=false) ?readonly:(readonly=false) ?throttle ~log_size fn ->
-      Printf.printf "%s: v called with fn %s\n" __LOC__ fn;
-      (* fn is actually the name of a directory .../store; so we store the actual data in btree.t *)
-      let fn = fn ^"/" ^ "btree.t" in
+      Printf.printf "%s: v called with fn %s; fresh=%B; readonly=%B\n" __LOC__ fn fresh readonly;
+      let e = Printexc.get_callstack 10 in
+      Printexc.print_raw_backtrace stdout e;
+      flush_all ();
       ignore(fresh);
       ignore(readonly);
-      begin fn |> Filename.dirname |> (fun d -> Sys.command ("mkdir -p "^d)) |> fun i -> ignore i end; (* FIXME fragile *) 
-      Btree_.create ~fn |> fun tree -> 
-      {tree; cache=Hashtbl.create 1000 }
+      begin fn |> (fun d -> Sys.command ("mkdir -p "^d)) |> fun i -> ignore i end; (* FIXME fragile *) 
+      (* fn is actually the name of a directory .../store; so we store the actual data in btree.t *)
+      let ctl_fn,max_log_len,map_fn = fn ^"/" ^ "ctl", 32_000_000, fn ^"/" ^ "pmap" in
+      Writer_.create ~ctl_fn ~max_log_len ~nv_map_ss_fn:map_fn |> fun t -> 
+      t
 
-  let find t k0 = 
+  let find t (k0:Key.t) = Writer_.find_opt t (Key.to_bin_string k0) |> function
+    | None -> None
+    | Some v -> Some (Val.decode v 0)
+
+(*
     Hashtbl.find_opt t.cache k0 |> function
     | Some v -> v
     | None -> 
@@ -108,16 +110,17 @@ module Make (K : Irmin.Hash.S) = struct
         let v = Val.decode v 0 in
         Hashtbl.replace t.cache k0 (Some v);
         Some v
+*)
 
   let add ?overcommit t k0 v = 
-    Hashtbl.replace t.cache k0 (Some v);
+    ignore(overcommit);
     let k = Key.to_bin_string k0 in
     v |> Val.encode |> fun v -> 
-    assert(String.length k <= max_k_size);
-    assert(String.length v <= max_v_size);
-    Btree_.insert t.tree k v
+    Writer_.insert t k v
 
-  let close t = Btree_.close t.tree
+  let close t = 
+    Printf.printf "Pack_index: close called\n%!";
+    Writer_.close t
 
   let merge _t = ()
   let iter _f _t = failwith __LOC__

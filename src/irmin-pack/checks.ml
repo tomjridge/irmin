@@ -117,7 +117,7 @@ module Make (M : Maker) = struct
       { pack; branch; dict }
 
     let traverse_index ~root log_size =
-      let index = Index.v ~readonly:true ~fresh:false ~log_size root in
+      let index = Index.vFIXME ~readonly:true ~fresh:false ~log_size root in
       let bar, (progress_contents, progress_nodes, progress_commits) =
         Utils.Progress.increment ~ppf:Format.err_formatter ()
       in

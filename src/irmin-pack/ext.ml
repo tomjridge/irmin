@@ -118,7 +118,7 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
           let throttle = Conf.merge_throttle config in
           let f = ref (fun () -> ()) in
           let index =
-            Index.v
+            Index.vFIXME
               ~flush_callback:(fun () -> !f ())
                 (* backpatching to add pack flush before an index flush *)
               ~fresh ~readonly ~throttle ~log_size root
