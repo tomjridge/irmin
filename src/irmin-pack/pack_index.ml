@@ -81,14 +81,14 @@ module Make (K : Irmin.Hash.S) = struct
     t
     = fun ?flush_callback ?fresh:(fresh=false) ?readonly:(readonly=false) ?throttle ~log_size fn ->
       Printf.printf "%s: v called with fn %s; fresh=%B; readonly=%B\n" __LOC__ fn fresh readonly;
-      let e = Printexc.get_callstack 10 in
+(*      let e = Printexc.get_callstack 10 in
       Printexc.print_raw_backtrace stdout e;
-      flush_all ();
+      flush_all (); *)
       ignore(fresh);
       ignore(readonly);
       begin fn |> (fun d -> Sys.command ("mkdir -p "^d)) |> fun i -> ignore i end; (* FIXME fragile *) 
       (* fn is actually the name of a directory .../store; so we store the actual data in btree.t *)
-      let ctl_fn,max_log_len,map_fn = fn ^"/" ^ "ctl", 32_000_000, fn ^"/" ^ "pmap" in
+      let ctl_fn,max_log_len,map_fn = fn ^"/" ^ "ctl", 128_000_000, fn ^"/" ^ "pmap" in
       Writer_.create ~ctl_fn ~max_log_len ~nv_map_ss_fn:map_fn |> fun t -> 
       t
 

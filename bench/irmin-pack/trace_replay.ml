@@ -392,7 +392,15 @@ module Make (Store : Store) = struct
           Stat_collector.close stats;
           if not config.no_summary then (
             Logs.app (fun l -> l "Computing summary...");
-            Some (Trace_stat_summary.summarise ~block_count stat_path))
+            try
+            let r = Some (Trace_stat_summary.summarise ~block_count stat_path) in
+            Logs.app (fun l -> l "Computed summary.");
+            r
+            with _e -> (
+                Printexc.print_backtrace Stdlib.stdout;
+                Stdlib.exit (-1)
+              )
+          )
           else None)
         (fun () ->
           if config.keep_stat_trace then (
