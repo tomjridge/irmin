@@ -208,11 +208,12 @@ module Io (Ff : File_format) = struct
       (* This could fail if [len] is not long enough for repr (corruption) *)
       decode (really_input_string chan len) 0
     in
-    if len <> len' then
+    if len <> len' then (
+      let pos,len_ic = Stdlib.pos_in chan, Stdlib.in_channel_length chan in
       Fmt.failwith
         "An value read in the Trace was expected to take %d bytes, but it took \
-         only %d."
-        len len';
+         only %d. (Position %d of %d.)"
+        len len' pos len_ic);
     v
 
   let decoded_seq_of_encoded_chan_with_prefixes :
