@@ -32,6 +32,9 @@ module Make
 struct
   module Hash = Irmin.Hash.Make (G.Hash)
   module Schema = Schema
+  module Key = Irmin.Key.Of_hash (Hash)
+  module Commit_key = Key
+  module Node_key = Key
 
   module Contents = struct
     module S = Contents.Make (G) (Schema.Contents)
@@ -45,26 +48,32 @@ struct
       Irmin.Node.Store (Contents) (S) (S.Key) (S.Val) (Metadata) (Schema.Path)
   end
 
+  module Node_portable = struct
+    include Node.Val
+
+    let of_node x = x
+  end
+
   module Commit = struct
     module S = Commit.Store (G)
-    include Irmin.Commit.Store (Schema.Info) (Node) (S) (S.Key) (S.Val)
+    include Irmin.Commit.Store (Schema.Info) (Node) (S) (S.Hash) (S.Val)
   end
 
   module Branch = struct
     module Key = Schema.Branch
-    module Val = Hash
+    module Val = Commit_key
     module S = Atomic_write.Make (Schema.Branch) (G)
     include Atomic_write.Check_closed (S)
 
     let v ?lock ~head ~bare t = S.v ?lock ~head ~bare t >|= v
   end
 
-  module Slice = Irmin.Private.Slice.Make (Contents) (Node) (Commit)
+  module Slice = Irmin.Backend.Slice.Make (Contents) (Node) (Commit)
 
   module Repo = struct
     let handle_git_err = function
       | Ok x -> Lwt.return x
-      | Error e -> Fmt.kstrf Lwt.fail_with "%a" G.pp_error e
+      | Error e -> Fmt.kstr Lwt.fail_with "%a" G.pp_error e
 
     type t = { config : Irmin.config; closed : bool ref; g : G.t; b : Branch.t }
 
@@ -84,7 +93,7 @@ struct
     }
 
     let config c =
-      let module C = Irmin.Private.Conf in
+      let module C = Irmin.Backend.Conf in
       let root = C.get c Conf.Key.root in
       let dot_git = C.get c Conf.Key.dot_git in
       let level = C.get c Conf.Key.level in
@@ -117,7 +126,7 @@ struct
   let repo_of_git ?head ?(bare = true) ?lock g =
     let+ b = Branch.v ?lock ~head ~bare g in
     {
-      Repo.config = Irmin.Private.Conf.empty Conf.spec;
+      Repo.config = Irmin.Backend.Conf.empty Conf.spec;
       closed = ref false;
       g;
       b;

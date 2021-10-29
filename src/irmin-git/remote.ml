@@ -38,11 +38,11 @@ struct
 
   (* let o_head_of_git = function None -> Ok None | Some k -> Ok (Some k) *)
 
-  let msgf fmt = Fmt.kstrf (fun err -> `Msg err) fmt
+  let msgf fmt = Fmt.kstr (fun err -> `Msg err) fmt
   let reword_error f = function Ok _ as v -> v | Error err -> Error (f err)
 
   let fetch t ?depth (ctx, e) br =
-    Log.debug (fun f -> f "fetch %a" Smart_git.Endpoint.pp e);
+    [%log.debug "fetch %a" Smart_git.Endpoint.pp e];
     let push_stdout msg = Gitlog.info (fun f -> f "%s" msg)
     and push_stderr msg = Gitlog.warn (fun f -> f "%s" msg)
     and deepen =
@@ -64,7 +64,7 @@ struct
     | Error (`Msg err) -> Lwt.return (Error (`Msg err))
     | Error (`Exn err) -> Lwt.return (Error (`Msg (Printexc.to_string err)))
     | Error err ->
-        Fmt.kstrf (fun e -> Lwt.return (Error (`Msg e))) "%a" S.pp_error err
+        Fmt.kstr (fun e -> Lwt.return (Error (`Msg e))) "%a" S.pp_error err
     | Ok None -> Lwt.return (Ok None)
     | Ok (Some (_, [ (reference, hash) ])) ->
         let value = Git.Reference.uid hash in
@@ -78,7 +78,7 @@ struct
     | _ -> assert false
 
   let push t ?depth:_ (ctx, e) br =
-    Log.debug (fun f -> f "push %a" Smart_git.Endpoint.pp e);
+    [%log.debug "push %a" Smart_git.Endpoint.pp e];
     let reference = git_of_branch br in
     let capabilities =
       [
@@ -94,6 +94,6 @@ struct
     | Error (`Msg err) -> Error (`Msg err)
     | Error (`Exn exn) -> Error (`Msg (Printexc.to_string exn))
     | Error `Not_found -> Error (`Msg "not found")
-    | Error err -> Error (`Msg (Fmt.strf "%a" S.pp_error err))
+    | Error err -> Error (`Msg (Fmt.str "%a" S.pp_error err))
     | Ok () -> Ok ()
 end

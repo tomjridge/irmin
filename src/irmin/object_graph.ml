@@ -31,26 +31,34 @@ let list_partition_map f t =
   in
   aux [] [] t
 
-module Make (Hash : HASH) (Branch : Type.S) = struct
+module Make
+    (Contents_key : Type.S)
+    (Node_key : Type.S)
+    (Commit_key : Type.S)
+    (Branch : Type.S) =
+struct
   module X = struct
     type t =
-      [ `Contents of Hash.t
-      | `Node of Hash.t
-      | `Commit of Hash.t
+      [ `Contents of Contents_key.t
+      | `Node of Node_key.t
+      | `Commit of Commit_key.t
       | `Branch of Branch.t ]
     [@@deriving irmin]
 
     let equal = Type.(unstage (equal t))
     let compare = Type.(unstage (compare t))
+    let hash_contents = Type.(unstage (short_hash Contents_key.t))
+    let hash_commit = Type.(unstage (short_hash Commit_key.t))
+    let hash_node = Type.(unstage (short_hash Node_key.t))
     let hash_branch = Type.(unstage (short_hash Branch.t))
 
     (* we are using cryptographic hashes here, so the first bytes
        are good enough to be used as short hashes. *)
     let hash (t : t) : int =
       match t with
-      | `Contents c -> Hash.short_hash c
-      | `Node n -> Hash.short_hash n
-      | `Commit c -> Hash.short_hash c
+      | `Contents c -> hash_contents c
+      | `Node n -> hash_node n
+      | `Commit c -> hash_commit c
       | `Branch b -> hash_branch b
   end
 
@@ -99,11 +107,11 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
 
   let iter ?cache_size ?(depth = max_int) ~pred ~min ~max ~node ?edge ~skip ~rev
       () =
-    Log.debug (fun f ->
-        f "@[<2>iter:@ %arev=%b,@ min=%a,@ max=%a@, cache=%a@]" pp_depth depth
-          rev pp_vertices min pp_vertices max
-          Fmt.(Dump.option int)
-          cache_size);
+    [%log.debug
+      "@[<2>iter:@ %arev=%b,@ min=%a,@ max=%a@, cache=%a@]" pp_depth depth rev
+        pp_vertices min pp_vertices max
+        Fmt.(Dump.option int)
+        cache_size];
     let marks = Table.create cache_size in
     let mark key level = Table.add marks key level in
     let todo = Stack.create () in
@@ -119,7 +127,7 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
     let has_mark key = Table.mem marks key in
     List.iter (fun k -> Stack.push (Visit (k, 0)) todo) max;
     let treat key =
-      Log.debug (fun f -> f "TREAT %a" Type.(pp X.t) key);
+      [%log.debug "TREAT %a" Type.(pp X.t) key];
       node key >>= fun () ->
       if not (Set.mem key min) then
         (* the edge function is optional to prevent an unnecessary computation
@@ -149,7 +157,7 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
         | true -> Lwt.return_unit
         | false ->
             let+ () =
-              Log.debug (fun f -> f "VISIT %a %d" Type.(pp X.t) key level);
+              [%log.debug "VISIT %a %d" Type.(pp X.t) key level];
               mark key level;
               if rev then Stack.push (Treat key) todo;
               match key with
@@ -176,7 +184,7 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
     let has_mark key = Table.mem marks key in
     List.iter (fun k -> Queue.push (Visit (k, 0)) todo) max;
     let treat key =
-      Log.debug (fun f -> f "TREAT %a" Type.(pp X.t) key);
+      [%log.debug "TREAT %a" Type.(pp X.t) key];
       node key
     in
     let visit_predecessors key level =
@@ -186,7 +194,7 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
     let visit key level =
       if has_mark key then Lwt.return_unit
       else (
-        Log.debug (fun f -> f "VISIT %a" Type.(pp X.t) key);
+        [%log.debug "VISIT %a" Type.(pp X.t) key];
         mark key level;
         treat key >>= fun () -> visit_predecessors key level)
     in
@@ -236,9 +244,9 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
     let vertex_name k =
       let str t v = "\"" ^ Type.to_string t v ^ "\"" in
       match k with
-      | `Node n -> str Hash.t n
-      | `Commit c -> str Hash.t c
-      | `Contents c -> str Hash.t c
+      | `Node n -> str Node_key.t n
+      | `Commit c -> str Commit_key.t c
+      | `Contents c -> str Contents_key.t c
       | `Branch b -> str Branch.t b
 
     let vertex_attributes k = !vertex_attributes k
@@ -258,7 +266,7 @@ module Make (Hash : HASH) (Branch : Type.S) = struct
     g
 
   let output ppf vertex edges name =
-    Log.debug (fun f -> f "output %s" name);
+    [%log.debug "output %s" name];
     let g = G.create ~size:(List.length vertex) () in
     List.iter (fun (v, _) -> G.add_vertex g v) vertex;
     List.iter (fun (v1, _, v2) -> G.add_edge g v1 v2) edges;

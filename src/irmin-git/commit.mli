@@ -14,7 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
-(** Private module: turn a Git store into an Irmin backend for Git commits. *)
+(** Backend module: turn a Git store into an Irmin backend for Git commits. *)
 
 module Make (G : Git.S) :
   Irmin.Commit.S
@@ -30,7 +30,7 @@ module Store (G : Git.S) : sig
        and type value = G.Value.Commit.t
 
   module Info = Irmin.Info.Default
-  module Key : Irmin.Hash.S with type t = key
+  module Hash : Irmin.Hash.S with type t = key
 
   module Val :
     Irmin.Commit.S

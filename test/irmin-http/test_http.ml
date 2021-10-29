@@ -24,8 +24,8 @@ let uri = Uri.of_string "http://irmin"
 type id = { name : string; id : int }
 
 let pp ppf t = Fmt.pf ppf "%s-%d" t.name t.id
-let socket t = test_http_dir / Fmt.strf "irmin-%a.sock" pp t
-let pid_file t = test_http_dir / Fmt.strf "irmin-test-%a.pid" pp t
+let socket t = test_http_dir / Fmt.str "irmin-%a.sock" pp t
+let pid_file t = test_http_dir / Fmt.str "irmin-test-%a.pid" pp t
 let tmp_file file = file ^ ".tmp"
 
 module Client (P : sig
@@ -84,11 +84,11 @@ let wait_for_the_server_to_start id =
       let line = input_line ic in
       close_in ic;
       let pid = int_of_string line in
-      Logs.debug (fun l -> l "read PID %d from %s" pid pid_file);
+      [%logs.debug "read PID %d from %s" pid pid_file];
       Unix.unlink pid_file;
       check_connection id >|= fun () -> pid)
     else (
-      Logs.debug (fun l -> l "waiting for the server to start...");
+      [%logs.debug "waiting for the server to start..."];
       Lwt_unix.sleep (float n *. 0.1) >>= fun () -> aux (n + 1))
   in
   aux 1
@@ -97,7 +97,7 @@ let servers = [ (`Quick, Test_mem.suite); (`Quick, Test_git.suite) ]
 
 module Conf = Irmin_http.Conf
 
-let root c = Irmin.Private.Conf.(get c (root Irmin_http.Conf.spec))
+let root c = Irmin.Backend.Conf.(get c (root Irmin_http.Conf.spec))
 
 let mkdir d =
   Lwt.catch
@@ -118,7 +118,7 @@ let rec lock id =
   Lwt.catch
     (fun () ->
       Lwt_unix.lockf fd Unix.F_LOCK 0 >>= fun () ->
-      Logs.debug (fun l -> l "write PID %s in %s" pid pid_file);
+      [%logs.debug "write PID %s in %s" pid pid_file];
       let* len = Lwt_unix.write fd (Bytes.of_string pid) 0 pid_len in
       if len <> pid_len then
         Lwt_unix.close fd >>= fun () ->
@@ -131,15 +131,23 @@ let rec lock id =
 
 let unlock fd = Lwt_unix.close fd
 
+let get_store suite =
+  match Irmin_test.Suite.store suite with
+  | Some x -> x
+  | None ->
+      failwith
+        "Cannot construct `irmin-http` test suite for non-content-addressable \
+         backend. Pass a store of type `Irmin.S`."
+
 let serve servers n id =
   Logs.set_level ~all:true (Some Logs.Debug);
-  Logs.debug (fun l -> l "pwd: %s" @@ Unix.getcwd ());
+  [%logs.debug "pwd: %s" @@ Unix.getcwd ()];
   let _, (server : Irmin_test.Suite.t) = List.nth servers n in
-  Logs.debug (fun l ->
-      l "Got server: %s, root=%s"
-        (Irmin_test.Suite.name server)
-        (root (Irmin_test.Suite.config server)));
-  let (module Server : Irmin_test.S) = Irmin_test.Suite.store server in
+  [%logs.debug
+    "Got server: %s, root=%s"
+      (Irmin_test.Suite.name server)
+      (root (Irmin_test.Suite.config server))];
+  let (module Server : Irmin_test.S) = get_store server in
   let module HTTP = Irmin_http.Server (Cohttp_lwt_unix.Server) (Server) in
   let test = { name = Irmin_test.Suite.name server; id } in
   let socket = socket test in
@@ -195,20 +203,19 @@ let suite i server =
         root
         ^ "_build"
           / "default"
-          / Fmt.strf "%s serve %d %d &" Sys.argv.(0) i id.id
+          / Fmt.str "%s serve %d %d &" Sys.argv.(0) i id.id
       in
       Fmt.epr "pwd=%s\nExecuting: %S\n%!" pwd cmd;
       let _ = Sys.command cmd in
       let+ pid = wait_for_the_server_to_start id in
       server_pid := pid)
-    ~stats:None
     ~clean:(fun () ->
       kill_server socket !server_pid;
       Irmin_test.Suite.clean server ())
     ~config:
-      (Irmin_http.config uri (Irmin.Private.Conf.empty Irmin_http.Conf.spec))
-    ~store:(http_store id (Irmin_test.Suite.store server))
-    ~layered_store:None
+      (Irmin_http.config uri (Irmin.Backend.Conf.empty Irmin_http.Conf.spec))
+    ~store:(http_store id (get_store server))
+    ~layered_store:None ()
 
 let suites servers =
   if Sys.os_type = "Win32" then

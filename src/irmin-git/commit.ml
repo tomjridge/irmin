@@ -19,10 +19,13 @@ open Import
 module Make (G : Git.S) = struct
   module Info = Irmin.Info.Default
   module Raw = Git.Value.Make (G.Hash)
-  module Key = Irmin.Hash.Make (G.Hash)
+  module Hash = Irmin.Hash.Make (G.Hash)
+  module Key = Irmin.Key.Of_hash (Hash)
 
   type t = G.Value.Commit.t
-  type hash = Key.t [@@deriving irmin]
+  type commit_key = Key.t [@@deriving irmin]
+  type node_key = Key.t [@@deriving irmin]
+  type hash = Hash.t [@@deriving irmin]
 
   let info_of_git author message =
     let id = author.Git.User.name in
@@ -78,7 +81,7 @@ module Make (G : Git.S) = struct
     let message = Option.value ~default:"" (G.Value.Commit.message g) in
     info_of_git author message
 
-  module C = Irmin.Commit.Make (Key)
+  module C = Irmin.Commit.Make (Hash)
 
   let of_c c = to_git (C.info c) (C.node c) (C.parents c)
 
@@ -88,14 +91,12 @@ module Make (G : Git.S) = struct
 
   let to_bin t = Raw.to_raw (G.Value.commit t)
 
-  let encode_bin =
-    Irmin.Type.stage @@ fun (t : t) k ->
-    Log.debug (fun l -> l "Commit.encode_bin");
+  let encode_bin (t : t) k =
+    [%log.debug "Commit.encode_bin"];
     k (to_bin t)
 
-  let decode_bin =
-    Irmin.Type.stage @@ fun buf off ->
-    Log.debug (fun l -> l "Commit.decode_bin");
+  let decode_bin buf off =
+    [%log.debug "Commit.decode_bin"];
     match Raw.of_raw_with_header ~off buf with
     | Ok (Git.Value.Commit t) -> (String.length buf, t)
     | Ok _ -> failwith "wrong object kind"
@@ -107,7 +108,7 @@ end
 
 module Store (G : Git.S) = struct
   module Info = Irmin.Info.Default
-  module Key = Irmin.Hash.Make (G.Hash)
+  module Hash = Irmin.Hash.Make (G.Hash)
   module Val = Make (G)
 
   module V = struct

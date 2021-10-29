@@ -24,7 +24,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 module T = Irmin.Type
 
 module Conf = struct
-  include Irmin.Private.Conf
+  include Irmin.Backend.Conf
 
   let spec = Spec.v "http"
 
@@ -62,7 +62,7 @@ let err_no_uri () = invalid_arg "Irmin_http.create: No URI specified"
 let get_uri config =
   match Conf.(get config Key.uri) with None -> err_no_uri () | Some u -> u
 
-let invalid_arg fmt = Fmt.kstrf Lwt.fail_invalid_arg fmt
+let invalid_arg fmt = Fmt.kstr Lwt.fail_invalid_arg fmt
 
 exception Escape of ((int * int) * (int * int)) * Jsonm.error
 
@@ -155,7 +155,7 @@ module Helper (Client : Cohttp_lwt.S.Client) :
       match parse b with
       | Ok x -> Lwt.return x
       | Error (`Msg e) ->
-          Lwt.fail_with (Fmt.strf "Error while parsing %S: %s" b e)
+          Lwt.fail_with (Fmt.str "Error while parsing %S: %s" b e)
     else Lwt.fail_with ("Server error: " ^ b)
 
   let map_stream_response t (r, b) =
@@ -188,13 +188,11 @@ module Helper (Client : Cohttp_lwt.S.Client) :
     let uri = uri_append t path in
     let body = match body with None -> None | Some b -> Some (`String b) in
     let headers = headers ~keep_alive () in
-    Log.debug (fun f ->
-        f "%s %s" (Cohttp.Code.string_of_method meth) (Uri.path uri));
+    [%log.debug "%s %s" (Cohttp.Code.string_of_method meth) (Uri.path uri)];
     Lwt.catch
       (fun () -> Client.call ?ctx meth ~headers ?body uri >>= fn)
       (fun e ->
-        Log.debug (fun l ->
-            l "request to %a failed: %a" Uri.pp_hum uri Fmt.exn e);
+        [%log.debug "request to %a failed: %a" Uri.pp_hum uri Fmt.exn e];
         Lwt.fail e)
 
   let call meth t ctx ?body path parse =
@@ -282,7 +280,7 @@ functor
   struct
     module RO = RO (Client) (K) (V)
     module HTTP = RO.HTTP
-    module W = Irmin.Private.Watch.Make (K) (V)
+    module W = Irmin.Backend.Watch.Make (K) (V)
 
     type key = RO.key
     type value = RO.value
@@ -338,7 +336,7 @@ functor
           | `Not_found | `OK -> Lwt.return_unit
           | _ ->
               let* b = Cohttp_lwt.Body.to_string b in
-              Fmt.kstrf Lwt.fail_with "cannot remove %a: %s" pp_key key b)
+              Fmt.kstr Lwt.fail_with "cannot remove %a: %s" pp_key key b)
 
     let nb_keys t = fst (W.stats t.w)
     let nb_glob t = snd (W.stats t.w)
@@ -401,11 +399,12 @@ functor
                   | `Added v | `Updated (_, v) -> Some v
                 in
                 let k = ev.branch in
-                Log.debug (fun l ->
-                    let pp_opt =
-                      Fmt.option ~none:(Fmt.any "<none>") (Irmin.Type.pp V.t)
-                    in
-                    l "notify %a: %a" pp_key k pp_opt diff);
+                [%log.debug fun l ->
+                  let pp_opt =
+                    Fmt.option ~none:(Fmt.any "<none>") (Irmin.Type.pp V.t)
+                  in
+                  l "notify %a: %a" pp_key k pp_opt diff]
+                ;
                 W.notify t.w k diff)
               s
           in
@@ -442,6 +441,7 @@ module Client (Client : HTTP_CLIENT) (S : Irmin.S) = struct
   module X = struct
     module Hash = S.Hash
     module Schema = S.Schema
+    module Key = Irmin.Key.Of_hash (Hash)
 
     module Contents = struct
       module X = struct
@@ -457,15 +457,15 @@ module Client (Client : HTTP_CLIENT) (S : Irmin.S) = struct
     end
 
     module Node = struct
-      module Val = S.Private.Node.Val
-      module Key = Irmin.Hash.Typed (S.Hash) (Val)
+      module Val = S.Backend.Node.Val
+      module Hash = Irmin.Hash.Typed (S.Hash) (Val)
       module CA = CA (Client) (S.Hash) (Val)
-      include CA
+      include Irmin.Indexable.Of_content_addressable (S.Hash) (CA)
       module Contents = Contents
       module Metadata = S.Metadata
       module Path = S.Key
 
-      let merge t =
+      let merge (t : _ t) =
         let f ~(old : Key.t option Irmin.Merge.promise) left right =
           let* old =
             old () >|= function
@@ -477,18 +477,30 @@ module Client (Client : HTTP_CLIENT) (S : Irmin.S) = struct
             Irmin.Type.(to_string (merge_t (option Key.t))) { old; left; right }
           in
           let result = merge_result_t Key.t in
-          HTTP.call `POST t.uri t.ctx [ t.items; "merge" ] ~body
+          CA.HTTP.call `POST t.uri t.ctx [ t.items; "merge" ] ~body
             (Irmin.Type.of_string result)
         in
         Irmin.Merge.(v Irmin.Type.(option Key.t)) f
 
-      let v ?ctx config = v ?ctx config "tree" "trees"
+      let v ?ctx config = CA.v ?ctx config "tree" "trees"
+    end
+
+    module Node_portable = struct
+      include Node.Val
+
+      let of_node x = x
     end
 
     module Commit = struct
       module X = struct
         module Key = S.Hash
-        module Val = S.Private.Commit.Val
+
+        module Val = struct
+          include S.Backend.Commit.Val
+
+          type hash = S.Hash.t [@@deriving irmin]
+        end
+
         module CA = CA (Client) (Key) (Val)
         include Closeable.Content_addressable (CA)
       end
@@ -498,13 +510,13 @@ module Client (Client : HTTP_CLIENT) (S : Irmin.S) = struct
       let v ?ctx config = X.v ?ctx config "commit" "commits"
     end
 
-    module Slice = Irmin.Private.Slice.Make (Contents) (Node) (Commit)
-    module Remote = Irmin.Private.Remote.None (Hash) (S.Branch)
+    module Slice = Irmin.Backend.Slice.Make (Contents) (Node) (Commit)
+    module Remote = Irmin.Backend.Remote.None (Hash) (S.Branch)
 
     module Branch = struct
       module Key = S.Branch
-      module Val = S.Hash
-      include Closeable.Atomic_write (RW (Client) (Key) (Val))
+      module Val = Commit.Key
+      include Closeable.Atomic_write (RW (Client) (Key) (S.Hash))
 
       let v ?ctx config = v ?ctx config "branch" "branches"
     end
@@ -547,7 +559,7 @@ module Client (Client : HTTP_CLIENT) (S : Irmin.S) = struct
     end
   end
 
-  include Irmin.Of_private (X)
+  include Irmin.Of_backend (X)
 end
 
 module type SERVER = Irmin_http_server.S

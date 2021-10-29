@@ -28,7 +28,7 @@ let fresh_name =
   fun () ->
     incr c;
     let name = Filename.concat root ("layered_" ^ string_of_int !c) in
-    Logs.info (fun m -> m "Constructing irmin store %s" name);
+    [%logs.info "Constructing irmin store %s" name];
     name
 
 let index_log_size = Some 4
@@ -92,13 +92,13 @@ module Test = struct
     Common.rm_dir root;
     let+ repo = Store.Repo.v (config ?readonly ?with_lower root) in
     let index = { root; repo } in
-    let tree = Store.Tree.empty in
+    let tree = Store.Tree.empty () in
     { index; tree; parents = [] }
 
   let clone ?readonly ?with_lower root =
     let+ repo = Store.Repo.v (config ~fresh:false ?readonly ?with_lower root) in
     let index = { root; repo } in
-    let tree = Store.Tree.empty in
+    let tree = Store.Tree.empty () in
     { index; tree; parents = [] }
 
   let freeze ?copy_in_upper ctxt commit =
@@ -108,7 +108,7 @@ module Test = struct
       | None | Some true -> None
     in
     Store.freeze ?max_upper ctxt.index.repo ~max_lower:[ commit ] >|= fun () ->
-    { index = ctxt.index; tree = Store.Tree.empty; parents = [] }
+    { index = ctxt.index; tree = Store.Tree.empty (); parents = [] }
 
   let commit_block1 ctxt =
     let* ctxt = set ctxt [ "a"; "b" ] "Novembre" in
@@ -220,9 +220,7 @@ module Test = struct
     | Some _ -> Alcotest.failf "should not find %s" msg
 
   let commit_block1_simple_store repo =
-    let* tree =
-      StoreSimple.Tree.add StoreSimple.Tree.empty [ "a"; "b" ] "Novembre"
-    in
+    let tree = StoreSimple.Tree.singleton [ "a"; "b" ] "Novembre" in
     let* tree = StoreSimple.Tree.add tree [ "a"; "c" ] "Juin" in
     let* tree = StoreSimple.Tree.add tree [ "version" ] "0.0" in
     let+ block1 =
@@ -243,7 +241,7 @@ module Test = struct
     let* ctxt, block1b = checkout_and_commit ctxt block1 commit_block1b in
     let* ctxt = freeze ctxt block1a in
     check_block1 ctxt.index.repo block1 >>= fun () ->
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_removed ctxt block1b "block1b" >>= fun () ->
     check_block1a ctxt.index.repo block1a >>= fun () ->
     Store.Repo.close ctxt.index.repo
@@ -252,7 +250,7 @@ module Test = struct
       used after freeze and after closing and reopening the store. *)
   let test_close_freeze () =
     let check_upper msg expected repo =
-      let x = Store.Private_layer.upper_in_use repo in
+      let x = Store.Backend_layer.upper_in_use repo in
       if expected <> x then Alcotest.fail msg
     in
     let* ctxt = init () in
@@ -260,7 +258,7 @@ module Test = struct
     check_upper "upper1.1" `Upper1 ctxt.index.repo;
     let* ctxt, block1 = commit_block1 ctxt in
     let* ctxt = freeze ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_upper "upper0.1" `Upper0 ctxt.index.repo;
     let* ctxt, block1a = checkout_and_commit ctxt block1 commit_block1a in
     Store.Repo.close ctxt.index.repo >>= fun () ->
@@ -285,9 +283,9 @@ module Test = struct
     let* ctxt, block1a = checkout_and_commit ctxt block1 commit_block1a in
     let* ctxt, block1b = checkout_and_commit ctxt block1 commit_block1b in
     Store.sync ro_ctxt.index.repo;
-    Log.debug (fun l -> l "Freeze removes block1b but keeps block1, block1a");
+    [%log.debug "Freeze removes block1b but keeps block1, block1a"];
     let* ctxt = freeze ctxt block1a in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_block1 ro_ctxt.index.repo block1 >>= fun () ->
     check_block1a ro_ctxt.index.repo block1a >>= fun () ->
     check_block1b ro_ctxt.index.repo block1b >>= fun () ->
@@ -298,9 +296,9 @@ module Test = struct
     let* ctxt, block2a = checkout_and_commit ctxt block1a commit_block2a in
     let* ctxt, block1c = checkout_and_commit ctxt block1a commit_block1c in
     Store.sync ro_ctxt.index.repo;
-    Log.debug (fun l -> l "Freeze removes block1c but keeps block2a");
+    [%log.debug "Freeze removes block1c but keeps block2a"];
     let* ctxt = freeze ctxt block2a in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_block2a ro_ctxt.index.repo block2a >>= fun () ->
     check_block1c ro_ctxt.index.repo block1c >>= fun () ->
     Store.sync ro_ctxt.index.repo;
@@ -317,10 +315,10 @@ module Test = struct
     let* ctxt, block1 = commit_block1 ctxt in
     Store.sync ro_ctxt.index.repo;
     let* ctxt = freeze ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     let* ctxt, block1a = checkout_and_commit ctxt block1 commit_block1a in
     let* ctxt = freeze ctxt block1a in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_block1 ro_ctxt.index.repo block1 >>= fun () ->
     Store.Repo.close ctxt.index.repo >>= fun () ->
     Store.Repo.close ro_ctxt.index.repo
@@ -373,7 +371,7 @@ module Test = struct
     let* ctxt = init () in
     let* ctxt, block1 = commit_block1 ctxt in
     let* ctxt = freeze ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     let hash1 = Store.Commit.hash block1 in
     Store.Repo.close ctxt.index.repo >>= fun () ->
     let* repo =
@@ -427,23 +425,23 @@ module Test = struct
     let* ctxt = init ~with_lower:false () in
     let* ro_ctxt = clone ~readonly:true ~with_lower:false ctxt.index.root in
     let* ctxt, block1 = commit_block1 ctxt in
-    Log.debug (fun l -> l "Freeze removes block1 from upper");
+    [%log.debug "Freeze removes block1 from upper"];
     let* ctxt = freeze ~copy_in_upper:false ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_removed ctxt block1 "block1" >>= fun () ->
     Store.sync ro_ctxt.index.repo;
     check_removed ro_ctxt block1 "block1" >>= fun () ->
     let* ctxt, block1 = commit_block1 ctxt in
-    Log.debug (fun l -> l "Freeze keeps block1 in upper");
+    [%log.debug "Freeze keeps block1 in upper"];
     let* ctxt = freeze ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_block1 ctxt.index.repo block1 >>= fun () ->
     Store.sync ro_ctxt.index.repo;
     check_block1 ro_ctxt.index.repo block1 >>= fun () ->
     let* ctxt, block1a = checkout_and_commit ctxt block1 commit_block1a in
-    Log.debug (fun l -> l "Freeze removes block1, block1a from upper");
+    [%log.debug "Freeze removes block1, block1a from upper"];
     let* ctxt = freeze ~copy_in_upper:false ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_removed ctxt block1 "block1" >>= fun () ->
     check_removed ctxt block1a "block1a" >>= fun () ->
     Store.sync ro_ctxt.index.repo;
@@ -469,7 +467,7 @@ module Test = struct
       Store.freeze ctxt.index.repo ~min_upper:[ block1a; block1c ]
         ~max_lower:[ block2a; block1c; block3a ]
     in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_removed ctxt block1 "block1" >>= fun () ->
     check_removed ctxt block1b "block1b" >>= fun () ->
     check_block1c ctxt.index.repo block1c >>= fun () ->
@@ -483,13 +481,13 @@ module Test = struct
     let* ctxt = init ~with_lower:false () in
     let* ctxt, block1 = commit_block1 ctxt in
     let* ctxt = freeze ctxt block1 in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     Store.Repo.close ctxt.index.repo >>= fun () ->
     let* ctxt = clone ~with_lower:true ctxt.index.root in
     check_block1 ctxt.index.repo block1 >>= fun () ->
     let* ctxt, block1a = checkout_and_commit ctxt block1 commit_block1a in
     Store.freeze ctxt.index.repo ~max_lower:[ block1a ] >>= fun () ->
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     let check_layer block msg exp =
       Store.layer_id ctxt.index.repo (Store.Commit_t (Store.Commit.hash block))
       >|= Irmin_test.check Irmin_layers.Layer_id.t msg exp
@@ -516,7 +514,7 @@ module Test = struct
         ~max_lower:[ block2a; block1b; block1c ]
         ~max_upper:[]
     in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     let* ctxt, block3a = checkout_and_commit ctxt block2a commit_block3a in
     Store.self_contained ~max:[ block3a; block1c ] ctxt.index.repo >>= fun () ->
     Store.Repo.close ctxt.index.repo >>= fun () ->
@@ -526,7 +524,7 @@ module Test = struct
     check_block1c ctxt.index.repo block1c >>= fun () ->
     Store.Repo.close ctxt.index.repo
 
-  module Hook = Store.Private_layer.Hook
+  module Hook = Store.Backend_layer.Hook
 
   let hook before after =
     Hook.v (function
@@ -547,10 +545,10 @@ module Test = struct
       check_block1 ro_ctxt.index.repo block1
     in
     let* () =
-      Store.Private_layer.freeze' ctxt.index.repo ~max_lower:[ block1 ]
+      Store.Backend_layer.freeze' ctxt.index.repo ~max_lower:[ block1 ]
         ~hook:(hook before after)
     in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     check_block1 ro_ctxt.index.repo block1 >>= fun () ->
     Store.Repo.close ctxt.index.repo >>= fun () ->
     Store.Repo.close ro_ctxt.index.repo
@@ -566,10 +564,10 @@ module Test = struct
     in
     let after () = Lwt.return_unit in
     let* () =
-      Store.Private_layer.freeze' ctxt.index.repo ~max_lower:[ block1 ]
+      Store.Backend_layer.freeze' ctxt.index.repo ~max_lower:[ block1 ]
         ~hook:(hook before after)
     in
-    Store.Private_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
+    Store.Backend_layer.wait_for_freeze ctxt.index.repo >>= fun () ->
     if Store.async_freeze ro_ctxt.index.repo then
       Alcotest.fail "Readonly sees a freeze that finished";
     Store.Repo.close ctxt.index.repo >>= fun () ->

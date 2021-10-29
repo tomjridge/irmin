@@ -45,26 +45,29 @@ let is_valid_utf8 str =
     true
   with Utf8_failure -> false
 
-module Make (S : Store.S) = struct
+module Make (S : Store.Generic_key.S) = struct
   type db = S.t
 
-  module Branch = S.Private.Branch
-  module Contents = S.Private.Contents
-  module Node = S.Private.Node
-  module Commit = S.Private.Commit
-  module Slice = S.Private.Slice
-  module Graph = Object_graph.Make (S.Hash) (Branch.Key)
+  module Branch = S.Backend.Branch
+  module Contents = S.Backend.Contents
+  module Node = S.Backend.Node
+  module Commit = S.Backend.Commit
+  module Slice = S.Backend.Slice
+
+  module Graph =
+    Object_graph.Make (Contents.Hash) (Node.Hash) (Commit.Hash) (Branch.Key)
+
   module Info = S.Info
 
   let pp_author = Type.pp Info.author_t
   let pp_message = Type.pp Info.message_t
 
   let fprintf (t : db) ?depth ?(html = false) ?full ~date name =
-    Log.debug (fun f ->
-        f "fprintf depth=%s html=%b full=%s"
-          (match depth with None -> "<none>" | Some d -> string_of_int d)
-          html
-          (match full with None -> "<none>" | Some b -> string_of_bool b));
+    [%log.debug
+      "depth=%s html=%b full=%s"
+        (match depth with None -> "<none>" | Some d -> string_of_int d)
+        html
+        (match full with None -> "<none>" | Some b -> string_of_bool b)];
     let* slice = S.Repo.export ?full ?depth (S.repo t) in
     let vertex = Hashtbl.create 102 in
     let add_vertex v l = Hashtbl.add vertex v l in
@@ -73,7 +76,7 @@ module Make (S : Store.S) = struct
     let add_edge v1 l v2 =
       if mem_vertex v1 && mem_vertex v2 then edges := (v1, l, v2) :: !edges
     in
-    let string_of_key t k =
+    let string_of_hash t k =
       let s = Type.to_string t k in
       if String.length s <= 8 then s else String.with_range s ~len:8
     in
@@ -89,7 +92,7 @@ module Make (S : Store.S) = struct
         (if html then
          sprintf "<div class='node'><div class='sha1'>%s</div></div>"
         else fun x -> x)
-          (string_of_key Node.Key.t k)
+          (string_of_hash Node.Hash.t k)
       in
       `Label s
     in
@@ -102,7 +105,7 @@ module Make (S : Store.S) = struct
       `Label s
     in
     let label_of_commit k c =
-      let k = string_of_key Commit.Key.t k in
+      let k = string_of_hash Commit.Hash.t k in
       let o = Commit.Val.info c in
       let s =
         if html then
@@ -123,7 +126,7 @@ module Make (S : Store.S) = struct
       `Label s
     in
     let label_of_contents k v =
-      let k = string_of_key Contents.Key.t k in
+      let k = string_of_hash Contents.Hash.t k in
       let s =
         if html then
           sprintf
@@ -180,21 +183,26 @@ module Make (S : Store.S) = struct
           (fun (l, v) ->
             match v with
             | `Contents (v, _meta) ->
+                let v = Contents.Key.to_hash v in
                 add_edge (`Node k)
                   [ `Style `Dotted; label_of_step l ]
                   (`Contents v)
             | `Node n ->
+                let n = Node.Key.to_hash n in
                 add_edge (`Node k) [ `Style `Solid; label_of_step l ] (`Node n))
           (Node.Val.list t))
       !nodes;
     List.iter
       (fun (k, r) ->
         List.iter
-          (fun c -> add_edge (`Commit k) [ `Style `Bold ] (`Commit c))
+          (fun c ->
+            let c = Commit.Key.to_hash c in
+            add_edge (`Commit k) [ `Style `Bold ] (`Commit c))
           (Commit.Val.parents r);
-        add_edge (`Commit k) [ `Style `Dashed ] (`Node (Commit.Val.node r)))
+        let node_hash = Commit.Val.node r |> Node.Key.to_hash in
+        add_edge (`Commit k) [ `Style `Dashed ] (`Node node_hash))
       !commits;
-    let branch_t = S.Private.Repo.branch_t (S.repo t) in
+    let branch_t = S.Backend.Repo.branch_t (S.repo t) in
     let* bs = Branch.list branch_t in
     let+ () =
       Lwt_list.iter_s
@@ -202,6 +210,7 @@ module Make (S : Store.S) = struct
           Branch.find branch_t r >|= function
           | None -> ()
           | Some k ->
+              let k = Commit.Key.to_hash k in
               add_vertex (`Branch r)
                 [ `Shape `Plaintext; label_of_tag r; `Style `Filled ];
               add_edge (`Branch r) [ `Style `Bold ] (`Commit k))

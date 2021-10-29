@@ -41,7 +41,7 @@ let decode_json d =
   let decode d =
     match Jsonm.decode d with
     | `Lexeme l -> l
-    | `Error e -> failwith (Fmt.strf "%a" Jsonm.pp_error e)
+    | `Error e -> failwith (Fmt.str "%a" Jsonm.pp_error e)
     | _ -> failwith "invalid JSON encoding"
   in
   let rec unwrap v d =
@@ -111,7 +111,7 @@ module Json_value = struct
         with Invalid_argument _ -> false)
     | _, _ -> false
 
-  let t = Type.like ~equal:(Type.stage equal) ~pp ~of_string t
+  let t = Type.like ~equal ~pp ~of_string t
 
   let rec merge_object ~old x y =
     let open Merge.Infix in
@@ -184,7 +184,7 @@ module Json = struct
     | Error _ as err -> err
 
   let equal a b = Json_value.equal (`O a) (`O b)
-  let t = Type.like ~equal:(Type.stage equal) ~pp ~of_string t
+  let t = Type.like ~equal ~pp ~of_string t
 
   let merge =
     Merge.(option (alist Type.string Json_value.t (fun _ -> Json_value.merge)))
@@ -196,13 +196,13 @@ module String = struct
   let merge = Merge.idempotent Type.(option string)
 end
 
-module Store
-    (S : Content_addressable.S)
-    (H : Hash.S with type t = S.key)
+module Store_indexable
+    (S : Indexable.S)
+    (H : Hash.S with type t = S.hash)
     (C : S with type t = S.value) =
 struct
   module Val = C
-  module Key = Hash.Typed (H) (Val)
+  module Hash = Hash.Typed (H) (C)
   include S
 
   let read_opt t = function None -> Lwt.return_none | Some k -> find t k
@@ -215,15 +215,21 @@ struct
     Merge.like_lwt Type.(option Key.t) Val.merge (read_opt t) (add_opt t)
 end
 
+module Store
+    (S : Content_addressable.S)
+    (H : Hash.S with type t = S.key)
+    (C : S with type t = S.value) =
+  Store_indexable (Indexable.Of_content_addressable (H) (S)) (H) (C)
+
 module V1 = struct
   module String = struct
     include String
 
     let t = Type.(boxed (string_of `Int64))
+
+    type nonrec t = t [@@deriving irmin ~encode_bin ~decode_bin ~pre_hash]
+
     let size_of = Type.Size.t t
-    let decode_bin = Type.decode_bin t
-    let encode_bin = Type.encode_bin t
-    let pre_hash = Type.pre_hash t
     let t = Type.like t ~bin:(encode_bin, decode_bin, size_of) ~pre_hash
   end
 end

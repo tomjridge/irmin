@@ -17,42 +17,57 @@
 open! Import
 open Store_properties
 
+open struct
+  module type Node_portable = Node.Portable.S
+end
+
 module type S = sig
   module Schema : Schema.S
 
   module Hash : Hash.S with type t = Schema.Hash.t
   (** Internal hashes. *)
 
-  (** Private content store. *)
-  module Contents :
-    Contents.Store with type key = Hash.t and type value = Schema.Contents.t
+  (** Backend content store. *)
 
-  (** Private node store. *)
+  module Contents :
+    Contents.Store with type hash = Hash.t and type value = Schema.Contents.t
+
+  (** Backend node store. *)
+
   module Node :
     Node.Store
-      with type key = Hash.t
+      with type hash = Hash.t
+       and type Val.contents_key = Contents.key
        and module Path = Schema.Path
        and module Metadata = Schema.Metadata
 
-  (** Private commit store. *)
+  module Node_portable :
+    Node_portable
+      with type node := Node.value
+       and type hash := Hash.t
+       and type metadata := Schema.Metadata.t
+       and type step := Schema.Path.step
+
+  (** Backend commit store. *)
+
   module Commit :
     Commit.Store
-      with type key = Hash.t
-       and type value = Schema.Commit.t
+      with type hash = Hash.t
+       and type Val.node_key = Node.key
        and module Info = Schema.Info
 
-  (** Private branch store. *)
+  (** Backend branch store. *)
   module Branch :
-    Branch.Store with type key = Schema.Branch.t and type value = Hash.t
+    Branch.Store with type key = Schema.Branch.t and type value = Commit.key
 
-  (** Private slices. *)
+  (** Backend slices. *)
   module Slice :
     Slice.S
-      with type contents = Contents.key * Contents.value
-       and type node = Node.key * Node.value
-       and type commit = Commit.key * Commit.value
+      with type contents = Contents.hash * Contents.value
+       and type node = Node.hash * Node.value
+       and type commit = Commit.hash * Commit.value
 
-  (** Private repositories. *)
+  (** Backend repositories. *)
   module Repo : sig
     type t
 

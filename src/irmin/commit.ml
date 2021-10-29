@@ -22,46 +22,74 @@ let src = Logs.Src.create "irmin.commit" ~doc:"Irmin commits"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-module Maker (Info : Info.S) = struct
-  module Info = Info
+module Maker_generic_key (I : Info.S) = struct
+  module Info = I
 
-  module Make (H : Type.S) = struct
-    module Info = Info
+  module Make
+      (H : Type.S)
+      (N : Key.S with type hash = H.t)
+      (C : Key.S with type hash = H.t) :
+    S_generic_key
+      with type node_key = N.t
+       and type commit_key = C.t
+       and module Info = Info = struct
+    module Info = I
 
-    type hash = H.t [@@deriving irmin ~compare]
+    type node_key = N.t [@@deriving irmin ~compare]
+    type commit_key = C.t [@@deriving irmin]
 
-    type t = { node : hash; parents : hash list; info : Info.t }
+    type t = { node : node_key; parents : commit_key list; info : Info.t }
     [@@deriving irmin]
 
     let parents t = t.parents
     let node t = t.node
     let info t = t.info
+    let compare_hash = Type.(unstage (compare H.t))
+    let compare_commit x y = compare_hash (C.to_hash x) (C.to_hash y)
 
     let v ~info ~node ~parents =
-      let parents = List.fast_sort compare_hash parents in
+      let parents = List.fast_sort compare_commit parents in
       { node; parents; info }
   end
 end
 
-module Store
+module Maker (Info : Info.S) = struct
+  include Maker_generic_key (Info)
+
+  module Make (H : Type.S) = struct
+    type hash = H.t [@@deriving irmin]
+
+    module Key = Key.Of_hash (H)
+    include Make (H) (Key) (Key)
+  end
+end
+
+module Store_generic_key
     (I : Info.S)
     (N : Node.Store)
-    (S : Content_addressable.S with type key = N.key)
-    (K : Hash.S with type t = S.key)
-    (V : S with type hash = S.key and type t = S.value and module Info := I) =
+    (S : Indexable.S)
+    (H : Hash.S with type t = S.hash)
+    (V : S_generic_key
+           with type node_key = N.Key.t
+            and type commit_key = S.Key.t
+            and type t = S.value
+            and module Info := I) =
 struct
   module Node = N
   module Val = V
+  module Key = S.Key
+  module Hash = Hash.Typed (H) (V)
   module Info = I
-  module Key = Hash.Typed (K) (Val)
 
   type 'a t = 'a N.t * 'a S.t
   type key = Key.t [@@deriving irmin ~equal]
   type value = S.value
+  type hash = S.hash
 
   let add (_, t) = S.add t
   let unsafe_add (_, t) = S.unsafe_add t
   let mem (_, t) = S.mem t
+  let index (_, t) = S.index t
   let find (_, t) = S.find t
   let clear (_, t) = S.clear t
   let batch (n, s) f = N.batch n (fun n -> S.batch s (fun s -> f (n, s)))
@@ -73,9 +101,7 @@ struct
 
   let merge_node (t, _) = Merge.f (N.merge t)
   let pp_key = Type.pp Key.t
-
-  let err_not_found k =
-    Fmt.kstrf invalid_arg "Commit.get: %a not found" pp_key k
+  let err_not_found k = Fmt.kstr invalid_arg "Commit.get: %a not found" pp_key k
 
   let get (_, t) k =
     S.find t k >>= function None -> err_not_found k | Some v -> Lwt.return v
@@ -84,9 +110,11 @@ struct
     | None -> N.add n N.Val.empty
     | Some node -> Lwt.return node
 
+  let equal_key = Type.(unstage (equal Key.t))
   let equal_opt_keys = Type.(unstage (equal (option Key.t)))
 
   let merge_commit info t ~old k1 k2 =
+    [%log.debug "Commit.merge %a %a" pp_key k1 pp_key k2];
     let* v1 = get t k1 in
     let* v2 = get t k2 in
     if List.mem ~equal:equal_key k1 (Val.parents v2) then Merge.ok k2
@@ -99,7 +127,7 @@ struct
       let* old =
         old () >>= function
         | Error (`Conflict msg) ->
-            Log.debug (fun f -> f "old: conflict %s" msg);
+            [%log.debug "old: conflict %s" msg];
             Lwt.return_none
         | Ok o -> Lwt.return o
       in
@@ -124,9 +152,35 @@ struct
   let merge t ~info = Merge.(option (v Key.t (merge_commit info t)))
 end
 
+module Generic_key = struct
+  module type S = S_generic_key
+  module type Maker = Maker_generic_key
+
+  module Maker = Maker_generic_key
+  module Store = Store_generic_key
+  include Maker (Info.Default)
+end
+
+module Store
+    (I : Info.S)
+    (N : Node.Store)
+    (S : Content_addressable.S with type key = N.key)
+    (K : Hash.S with type t = S.key)
+    (V : S with type hash = S.key and type t = S.value and module Info := I) =
+struct
+  include
+    Store_generic_key (I) (N) (Indexable.Of_content_addressable (K) (S)) (K) (V)
+
+  module Val = struct
+    include Val
+
+    type hash = K.t [@@deriving irmin]
+  end
+end
+
 module History (S : Store) = struct
-  type commit = S.Key.t [@@deriving irmin]
-  type node = S.Key.t [@@deriving irmin]
+  type commit_key = S.Key.t [@@deriving irmin]
+  type node_key = S.Val.node_key [@@deriving irmin]
   type v = S.Val.t [@@deriving irmin]
   type info = S.Info.t [@@deriving irmin]
   type 'a t = 'a S.t
@@ -149,21 +203,21 @@ module History (S : Store) = struct
   let pp_key = Type.pp S.Key.t
 
   let parents t c =
-    Log.debug (fun f -> f "parents %a" pp_key c);
+    [%log.debug "parents %a" pp_key c];
     S.find t c >|= function None -> [] | Some c -> S.Val.parents c
 
   module U = struct
     type t = unit [@@deriving irmin]
   end
 
-  module Graph = Object_graph.Make (S.Key) (U)
+  module Graph = Object_graph.Make (U) (S.Node.Key) (S.Key) (U)
 
   let edges t =
-    Log.debug (fun f -> f "edges");
+    [%log.debug "edges"];
     [ `Node (S.Val.node t) ] @ List.map (fun k -> `Commit k) (S.Val.parents t)
 
   let closure t ~min ~max =
-    Log.debug (fun f -> f "closure");
+    [%log.debug "closure"];
     let pred = function
       | `Commit k -> ( S.find t k >|= function Some r -> edges r | None -> [])
       | _ -> Lwt.return_nil
@@ -201,7 +255,7 @@ module History (S : Store) = struct
     type t = S.Key.t
 
     let compare = Type.(unstage (compare S.Key.t))
-    let hash = S.Key.short_hash
+    let hash k = S.Hash.short_hash (S.Key.to_hash k)
     let equal = Type.(unstage (equal S.Key.t))
   end
 
@@ -219,7 +273,7 @@ module History (S : Store) = struct
 
   let pp_keys ppf keys =
     let keys = KSet.elements keys in
-    Fmt.pf ppf "[%a]" Fmt.(list ~sep:(unit " ") pp_key) keys
+    Fmt.pf ppf "[%a]" Fmt.(list ~sep:(any " ") pp_key) keys
 
   let str_keys = Fmt.to_to_string pp_keys
   let lca_calls = ref 0
@@ -300,11 +354,11 @@ module History (S : Store) = struct
            t.marks []
          |> String.concat " "
        in
-       Fmt.strf "d: %d, seen1: %s, seen2: %s, seenboth: %s, lcas: %s (%d) %s"
+       Fmt.str "d: %d, seen1: %s, seen2: %s, seenboth: %s, lcas: %s (%d) %s"
          t.depth (pp Seen1) (pp Seen2) (pp SeenBoth) (pp LCA) t.lcas
          (String.concat " | "
             (Hashtbl.fold
-               (fun d ks acc -> Fmt.strf "(%d: %s)" d (str_keys ks) :: acc)
+               (fun d ks acc -> Fmt.str "(%d: %s)" d (str_keys ks) :: acc)
                t.layers [])))
 
   let get_mark_exn t elt = KHashtbl.find t.marks elt
@@ -365,7 +419,7 @@ module History (S : Store) = struct
     let is_init () = equal_keys commit t.c1 || equal_keys commit t.c2 in
     let is_shared () = new_mark = SeenBoth || new_mark = LCA in
     if is_shared () && is_init () then (
-      Log.debug (fun f -> f "fast-forward");
+      [%log.debug "fast-forward"];
       t.complete <- true);
     set_mark t commit new_mark;
     new_mark
@@ -433,12 +487,11 @@ module History (S : Store) = struct
           traverse_bfs t ~f:(update_parents s) ~pp ~check ~init ~return)
         (fun () ->
           let t1 = Sys.time () -. t0 in
-          Log.debug (fun f ->
-              f "lcas %d: depth=%d time=%.4fs" !lca_calls s.depth t1);
+          [%log.debug "lcas %d: depth=%d time=%.4fs" !lca_calls s.depth t1];
           Lwt.return_unit)
 
   let rec three_way_merge t ~info ?max_depth ?n c1 c2 =
-    Log.debug (fun f -> f "3-way merge between %a and %a" pp_key c1 pp_key c2);
+    [%log.debug "3-way merge between %a and %a" pp_key c1 pp_key c2];
     if equal_keys c1 c2 then Merge.ok c1
     else
       let* lcas = lcas t ?max_depth ?n c1 c2 in
@@ -458,7 +511,7 @@ module History (S : Store) = struct
       let merge =
         merge t ~info
         |> Merge.with_conflict (fun msg ->
-               Fmt.strf "Recursive merging of common ancestors: %s" msg)
+               Fmt.str "Recursive merging of common ancestors: %s" msg)
         |> Merge.f
       in
       merge ~old c1 c2
@@ -503,31 +556,42 @@ module V1 = struct
       |> sealr
   end
 
-  module Make (C : S with module Info := Info) = struct
-    module Mk (X : Type.S) = struct
+  module Make (C : Generic_key.S with module Info := Info) = struct
+    module K (K : Type.S) = struct
       let h = Type.string_of `Int64
-      let hash_to_bin_string = Type.(unstage (to_bin_string X.t))
-      let hash_of_bin_string = Type.(unstage (of_bin_string X.t))
+      let hash_to_bin_string = Type.(unstage (to_bin_string K.t))
+      let hash_of_bin_string = Type.(unstage (of_bin_string K.t))
       let size_of = Type.Size.using hash_to_bin_string (Type.Size.t h)
 
       let encode_bin =
         let encode_bin = Type.(unstage (encode_bin h)) in
-        Type.stage @@ fun e k -> encode_bin (hash_to_bin_string e) k
+        fun e k -> encode_bin (hash_to_bin_string e) k
 
       let decode_bin =
         let decode_bin = Type.(unstage (decode_bin h)) in
-        Type.stage @@ fun buf off ->
-        let n, v = decode_bin buf off in
-        ( n,
-          match hash_of_bin_string v with
-          | Ok v -> v
-          | Error (`Msg e) -> Fmt.failwith "decode_bin: %s" e )
+        fun buf off ->
+          let n, v = decode_bin buf off in
+          ( n,
+            match hash_of_bin_string v with
+            | Ok v -> v
+            | Error (`Msg e) -> Fmt.failwith "decode_bin: %s" e )
 
-      let t = Type.like X.t ~bin:(encode_bin, decode_bin, size_of)
+      type t = K.t
+
+      let t = Type.like K.t ~bin:(encode_bin, decode_bin, size_of)
     end
 
-    type hash = C.hash [@@deriving irmin]
-    type t = { parents : hash list; c : C.t }
+    module Node_key = K (struct
+      type t = C.node_key [@@deriving irmin]
+    end)
+
+    module Commit_key = K (struct
+      type t = C.commit_key [@@deriving irmin]
+    end)
+
+    type node_key = Node_key.t [@@deriving irmin]
+    type commit_key = Commit_key.t [@@deriving irmin]
+    type t = { parents : commit_key list; c : C.t }
 
     module Info = Info
 
@@ -539,15 +603,11 @@ module V1 = struct
     let v ~info ~node ~parents = { parents; c = C.v ~node ~parents ~info }
     let make = v
 
-    module Hash = Mk (struct
-      type t = C.hash [@@deriving irmin]
-    end)
-
     let t : t Type.t =
       let open Type in
       record "commit" (fun node parents info -> make ~info ~node ~parents)
-      |+ field "node" Hash.t node
-      |+ field "parents" (list ~len:`Int64 Hash.t) parents
+      |+ field "node" Node_key.t node
+      |+ field "parents" (list ~len:`Int64 Commit_key.t) parents
       |+ field "info" Info.t info
       |> sealr
   end

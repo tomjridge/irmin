@@ -2,6 +2,11 @@ open! Import
 
 let test_dir = Filename.concat "_build" "test-pack-trace-replay"
 
+let testable t =
+  Alcotest.testable (Irmin.Type.pp_dump t) Irmin.Type.(unstage (equal t))
+
+let check t = Alcotest.check (testable t)
+
 module Conf = struct
   let entries = 32
   let stable_hash = 256
@@ -10,8 +15,7 @@ end
 module Store = struct
   type store_config = string
 
-  module Maker = Irmin_pack.V1 (Conf)
-  module Store = Maker.Make (Tezos_context_hash_irmin.Encoding)
+  module Store = Irmin_tezos.Store
 
   let create_repo store_dir =
     let conf = Irmin_pack.config ~readonly:false ~fresh:true store_dir in
@@ -55,7 +59,7 @@ let replay_1_commit () =
   assert (Sys.file_exists trace_path);
   if Sys.file_exists test_dir then (
     let cmd = Printf.sprintf "rm -rf %s" test_dir in
-    Logs.debug (fun l -> l "exec: %s\n%!" cmd);
+    [%logs.debug "exec: %s\n%!" cmd];
     let _ = Sys.command cmd in
     ());
 
@@ -76,14 +80,34 @@ let replay_1_commit () =
     }
   in
   let+ pp_result = Replay.run store_dir replay_config in
-  Logs.debug (fun l -> l "%t" pp_result);
+  [%logs.debug "%t" pp_result];
+  let got = Irmin_pack.Stats.get () in
+  let expected =
+    Irmin_pack.Stats.
+      {
+        finds = 2;
+        cache_misses = 0;
+        appended_hashes = 0;
+        appended_offsets = 4;
+        inode_add = 0;
+        inode_remove = 0;
+        inode_of_seq = 4;
+        inode_of_raw = 2;
+        inode_rec_add = 8;
+        inode_rec_remove = 0;
+        inode_to_binv = 2;
+        inode_decode_bin = 0;
+        inode_encode_bin = 2;
+      }
+  in
+  check Irmin_pack.Stats.t "Pack counters" expected got;
   ()
 
 module Store_mem = struct
   type store_config = string
 
   module Maker = Irmin_pack_mem.Maker (Conf)
-  module Store = Maker.Make (Tezos_context_hash_irmin.Encoding)
+  module Store = Maker.Make (Irmin_tezos.Schema)
 
   let create_repo store_dir =
     let conf = Irmin_pack.config ~readonly:false ~fresh:true store_dir in
@@ -108,7 +132,7 @@ let replay_1_commit_mem () =
   assert (Sys.file_exists trace_path);
   if Sys.file_exists test_dir then (
     let cmd = Printf.sprintf "rm -rf %s" test_dir in
-    Logs.debug (fun l -> l "exec: %s\n%!" cmd);
+    [%logs.debug "exec: %s\n%!" cmd];
     let _ = Sys.command cmd in
     ());
 
@@ -129,7 +153,7 @@ let replay_1_commit_mem () =
     }
   in
   let+ pp_result = Replay_mem.run store_dir replay_config in
-  Logs.debug (fun l -> l "%t" pp_result);
+  [%logs.debug "%t" pp_result];
   ()
 
 let test_cases =

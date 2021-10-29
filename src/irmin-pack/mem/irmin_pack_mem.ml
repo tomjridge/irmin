@@ -39,13 +39,16 @@ end
 module Maker (Config : Irmin_pack.Conf.S) = struct
   type endpoint = unit
 
-  module Make (Schema : Irmin.Schema.S) = struct
+  include Irmin.Key.Store_spec.Hash_keyed
+
+  module Make (Schema : Irmin.Schema.Extended) = struct
     module H = Schema.Hash
     module C = Schema.Contents
     module P = Schema.Path
     module M = Schema.Metadata
     module B = Schema.Branch
     module Pack = Content_addressable.Maker (H)
+    module XKey = Irmin.Key.Of_hash (H)
 
     module X = struct
       module Schema = Schema
@@ -59,47 +62,61 @@ module Maker (Config : Irmin_pack.Conf.S) = struct
       end
 
       module Node = struct
-        module CA = struct
-          module Inter =
-            Irmin_pack.Inode.Make_internal (Config) (H) (Schema.Node)
+        module Value = Schema.Node (XKey) (XKey)
 
+        module CA = struct
+          module Inter = Irmin_pack.Inode.Make_internal (Config) (H) (Value)
           module CA = Pack.Make (Inter.Raw)
-          include Irmin_pack.Inode.Make (H) (Schema.Node) (Inter) (CA)
+          include Irmin_pack.Inode.Make (H) (Value) (Inter) (CA)
 
           let v = CA.v
         end
 
-        include Irmin.Node.Store (Contents) (CA) (H) (CA.Val) (M) (P)
+        include
+          Irmin.Node.Generic_key.Store (Contents) (CA) (H) (CA.Val) (M) (P)
       end
 
+      module Node_portable = Node.CA.Val.Portable
+
       module Commit = struct
+        module Value = struct
+          include Schema.Commit (Node.Key) (XKey)
+
+          type hash = Hash.t [@@deriving irmin]
+        end
+
         module Pack_value =
           Irmin_pack.Pack_value.Of_commit
             (H)
             (struct
               module Info = Schema.Info
-              include Schema.Commit
+              include Value
             end)
 
         module CA = CA_mem (H) (Pack_value)
-        include Irmin.Commit.Store (Info) (Node) (CA) (H) (Schema.Commit)
+        include Irmin.Commit.Store (Info) (Node) (CA) (H) (Value)
       end
 
       module Branch = struct
         module Key = B
-        module Val = H
+
+        module Val = struct
+          include H
+          include Commit.Key
+        end
+
         module AW = Atomic_write (Key) (Val)
         include Irmin_pack.Atomic_write.Closeable (AW)
 
         let v () = AW.v () >|= make_closeable
       end
 
-      module Slice = Irmin.Private.Slice.Make (Contents) (Node) (Commit)
-      module Remote = Irmin.Private.Remote.None (H) (B)
+      module Slice = Irmin.Backend.Slice.Make (Contents) (Node) (Commit)
+      module Remote = Irmin.Backend.Remote.None (H) (B)
 
       module Repo = struct
         type t = {
-          config : Irmin.Private.Conf.t;
+          config : Irmin.Backend.Conf.t;
           contents : read Contents.CA.t;
           node : read Node.CA.t;
           commit : read Commit.CA.t;
@@ -142,7 +159,7 @@ module Maker (Config : Irmin_pack.Conf.S) = struct
       end
     end
 
-    include Irmin.Of_private (X)
+    include Irmin.Of_backend (X)
 
     let integrity_check_inodes ?heads:_ _ =
       Lwt.return

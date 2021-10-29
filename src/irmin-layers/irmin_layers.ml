@@ -33,8 +33,7 @@ module Maker
     (AW : Irmin.Atomic_write.Maker) =
 struct
   module Maker = Irmin.Maker (CA) (AW)
-
-  type endpoint = Maker.endpoint
+  include Maker
 
   module Make (Schema : Irmin.Schema.S) = struct
     include Maker.Make (Schema)
@@ -43,10 +42,10 @@ struct
         _repo =
       Lwt.fail_with "not implemented"
 
-    type store_handle =
-      | Commit_t : hash -> store_handle
-      | Node_t : hash -> store_handle
-      | Content_t : hash -> store_handle
+    type kinded_key =
+      | Commit_t of commit_key
+      | Node_t of node_key
+      | Content_t of contents_key
 
     let layer_id _repo _store_handle = Lwt.fail_with "not implemented"
     let async_freeze _ = failwith "not implemented"
@@ -55,7 +54,7 @@ struct
     let check_self_contained ?heads:_ _ = failwith "not implemented"
     let needs_recovery _ = failwith "not implemented"
 
-    module Private_layer = struct
+    module Backend_layer = struct
       module Hook = struct
         type 'a t = unit
 

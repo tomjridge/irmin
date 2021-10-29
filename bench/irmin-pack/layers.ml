@@ -38,7 +38,7 @@ module Contents = struct
   let ty = Irmin.Type.(pair (bytes_of `Int64) unit)
   let pre_hash_ty = Irmin.Type.(unstage (pre_hash ty))
   let pre_hash_v1 x = pre_hash_ty (x, ())
-  let t = Irmin.Type.(like bytes ~pre_hash:(stage @@ fun x -> pre_hash_v1 x))
+  let t = Irmin.Type.(like bytes ~pre_hash:pre_hash_v1)
   let merge = Irmin.Merge.(idempotent (Irmin.Type.option t))
 end
 
@@ -48,8 +48,8 @@ module Schema = struct
   module Path = Irmin.Path.String_list
   module Branch = Irmin.Branch.String
   module Hash = Irmin.Hash.SHA1
-  module Node = Irmin.Node.Make (Hash) (Path) (Metadata)
-  module Commit = Irmin.Commit.Make (Hash)
+  module Node = Irmin.Node.Generic_key.Make (Hash) (Path) (Metadata)
+  module Commit = Irmin.Commit.Generic_key.Make (Hash)
   module Info = Irmin.Info.Default
 end
 
@@ -75,7 +75,7 @@ let init config =
 module Trees = Generate_trees (Store)
 
 let init_commit repo =
-  Store.Commit.v repo ~info:(Info.f ()) ~parents:[] Store.Tree.empty
+  Store.Commit.v repo ~info:(Info.f ()) ~parents:[] (Store.Tree.empty ())
 
 let checkout_and_commit config repo c nb =
   Store.Commit.of_hash repo c >>= function
@@ -94,16 +94,16 @@ let print_commit_stats config c i time =
   let num_objects = Irmin_layers.Stats.get_add_count () in
   total := !total + num_objects;
   if config.show_stats then
-    Logs.app (fun l ->
-        l "Commit %a %d in cycle completed in %f; objects created: %d"
-          Store.Commit.pp_hash c i time num_objects)
+    [%logs.app
+      "Commit %a %d in cycle completed in %f; objects created: %d"
+        Store.Commit.pp_hash c i time num_objects]
 
 let get_maxrss () =
   let usage = Rusage.(get Self) in
   let ( / ) = Int64.div in
   Int64.to_int (usage.maxrss / 1024L / 1024L)
 
-let print_stats () = Logs.app (fun l -> l "%t" Irmin_layers.Stats.pp_latest)
+let print_stats () = [%logs.app "%t" Irmin_layers.Stats.pp_latest]
 
 let write_cycle config repo init_commit =
   let rec go c i =
@@ -149,8 +149,8 @@ let run_cycles config repo head json =
             freeze ~min_upper:[ min ] ~max:[ max ] config repo)
       in
       if config.show_stats then
-        Logs.app (fun l ->
-            l "call to freeze completed in %f, maxrss = %d" time (get_maxrss ()));
+        [%logs.app
+          "call to freeze completed in %f, maxrss = %d" time (get_maxrss ())];
       run_one_cycle max (i + 1)
   in
   run_one_cycle head 0
@@ -164,7 +164,7 @@ let rw config =
 let close config repo =
   let+ t, () = with_timer (fun () -> Store.Repo.close repo) in
   if config.show_stats then
-    Logs.app (fun l -> l "close %f, maxrss = %d" t (get_maxrss ()))
+    [%logs.app "close %f, maxrss = %d" t (get_maxrss ())]
 
 let run config json =
   let* repo = rw config in
@@ -172,7 +172,7 @@ let run config json =
   let* _ = run_cycles config repo c json in
   close config repo >|= fun () ->
   if config.show_stats then (
-    Logs.app (fun l -> l "After freeze thread finished : ");
+    [%logs.app "After freeze thread finished : "];
     FSHelper.print_size_layers config.root)
 
 module Continuous_benchmarks_results = struct
@@ -217,9 +217,9 @@ let main () ncommits ncycles depth clear no_freeze show_stats json
     }
   in
   if not json then
-    Logs.app (fun l ->
-        l "@[<v 2>Running benchmarks in %s:@,@,%a@,@]@." __FILE__
-          (Repr.pp_dump config_t) config);
+    [%logs.app
+      "@[<v 2>Running benchmarks in %s:@,@,%a@,@]@." __FILE__
+        (Repr.pp_dump config_t) config];
   init config;
   let d, _ = Lwt_main.run (with_timer (fun () -> run config json)) in
   let all_commits = ncommits * (ncycles + 5) in
@@ -228,10 +228,9 @@ let main () ncommits ncycles depth clear no_freeze show_stats json
   if json then
     Printf.printf "%s" (Continuous_benchmarks_results.get_json_str d rate freq)
   else
-    Logs.app (fun l ->
-        l
-          "%d commits completed in %.2fs.\n\
-           [%.3fs per commit, %.0f commits per second]" all_commits d rate freq)
+    [%logs.app
+      "%d commits completed in %.2fs.\n\
+       [%.3fs per commit, %.0f commits per second]" all_commits d rate freq]
 
 open Cmdliner
 

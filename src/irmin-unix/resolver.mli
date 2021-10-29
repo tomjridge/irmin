@@ -58,7 +58,7 @@ module Store : sig
             backend, a store may require a hash function. *)
 
   val v :
-    ?remote:remote_fn -> Irmin.Private.Conf.Spec.t -> (module Irmin.S) -> t
+    ?remote:remote_fn -> Irmin.Backend.Conf.Spec.t -> (module Irmin.S) -> t
 
   val mem : hash -> contents -> t
   val irf : hash -> contents -> t
@@ -69,7 +69,7 @@ module Store : sig
   val add : string -> ?default:bool -> store_functor -> unit
 
   val destruct :
-    t -> (module Irmin.S) * Irmin.Private.Conf.Spec.t * remote_fn option
+    t -> (module Irmin.S) * Irmin.Backend.Conf.Spec.t * remote_fn option
 
   val term : (string option * hash option * string option) Cmdliner.Term.t
 end
@@ -82,7 +82,7 @@ val remote : Irmin.remote Lwt.t Cmdliner.Term.t
 (** {1 Stores} *)
 
 val load_config :
-  ?default:Irmin.config ->
+  ?root:string ->
   ?config_path:string ->
   ?store:string ->
   ?hash:hash ->
@@ -92,6 +92,8 @@ val load_config :
 (** Load config file from disk
 
     [config_path] can be used to specify the location of a configuration file.
+
+    [root] is used to specify the path of the store.
 
     The values provided for [store], [hash] and [contents] will be used by
     default if no other value is found in the config file *)

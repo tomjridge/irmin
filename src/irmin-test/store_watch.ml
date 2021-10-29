@@ -17,7 +17,7 @@
 open! Import
 open Common
 
-module Make (Log : Logs.LOG) (S : S) = struct
+module Make (Log : Logs.LOG) (S : Generic_key) = struct
   include Common.Make_helpers (S)
 
   let sleep ?(sleep_t = 0.01) () =
@@ -31,17 +31,17 @@ module Make (Log : Logs.LOG) (S : S) = struct
   let retry ?(timeout = 15.) ?(sleep_t = 0.) ~while_ fn =
     let sleep_t = max sleep_t 0.001 in
     let t = now_s () in
-    let str i = Fmt.strf "%d, %.3fs" i (now_s () -. t) in
+    let str i = Fmt.str "%d, %.3fs" i (now_s () -. t) in
     let rec aux i =
       if now_s () -. t > timeout || not (while_ ()) then fn (str i);
       try
         fn (str i);
         Lwt.return_unit
       with ex ->
-        Log.debug (fun f -> f "retry ex: %s" (Printexc.to_string ex));
+        [%log.debug "retry ex: %s" (Printexc.to_string ex)];
         let sleep_t = sleep_t *. (1. +. (float i ** 2.)) in
         sleep ~sleep_t () >>= fun () ->
-        Log.debug (fun f -> f "Test.retry %s" (str i));
+        [%log.debug "Test.retry %s" (str i)];
         aux (i + 1)
     in
     aux 0
@@ -138,11 +138,11 @@ module Make (Log : Logs.LOG) (S : S) = struct
             (fun s ->
               let got = stats () in
               let exp = (p, w) in
-              let msg = Fmt.strf "workers: %s %a (%s)" msg pp_w got s in
+              let msg = Fmt.str "workers: %s %a (%s)" msg pp_w got s in
               if got = exp then line msg
               else (
-                Log.debug (fun f ->
-                    f "check-worker: expected %a, got %a" pp_w exp pp_w got);
+                [%log.debug
+                  "check-worker: expected %a, got %a" pp_w exp pp_w got];
                 Alcotest.failf "%s: %a / %a" msg pp_w got pp_w exp))
     in
     let module State = struct
@@ -158,15 +158,15 @@ module Make (Log : Logs.LOG) (S : S) = struct
       let empty () = { adds = 0; updates = 0; removes = 0 }
 
       let add t =
-        Log.debug (fun l -> l "add %a" pp t);
+        [%log.debug "add %a" pp t];
         t.adds <- t.adds + 1
 
       let update t =
-        Log.debug (fun l -> l "update %a" pp t);
+        [%log.debug "update %a" pp t];
         t.updates <- t.updates + 1
 
       let remove t =
-        Log.debug (fun l -> l "remove %a" pp t);
+        [%log.debug "remove %a" pp t];
         t.removes <- t.removes + 1
 
       let pretty ppf t = Fmt.pf ppf "%d/%d/%d" t.adds t.updates t.removes
@@ -187,7 +187,7 @@ module Make (Log : Logs.LOG) (S : S) = struct
         retry ?sleep_t
           ~while_:(fun () -> less_than b a (* While [b] converges toward [a] *))
           (fun s ->
-            let msg = Fmt.strf "state: %s (%s)" msg s in
+            let msg = Fmt.str "state: %s (%s)" msg s in
             if a = b then line msg
             else Alcotest.failf "%s: %a / %a" msg pp a pp b)
 
@@ -216,8 +216,8 @@ module Make (Log : Logs.LOG) (S : S) = struct
           let mode =
             match mode with `Pre -> "[pre-condition]" | `Post -> ""
           in
-          Fmt.strf "%s %s %s %d on=%b expected=%a:%a current=%a:%a" mode msg
-            kind n on xpp s pp_w w pretty state pp_s x.stats
+          Fmt.str "%s %s %s %d on=%b expected=%a:%a current=%a:%a" mode msg kind
+            n on xpp s pp_w w pretty state pp_s x.stats
         in
         let check mode n w s = check (msg mode n w s) w s state in
         let incr =
@@ -236,8 +236,7 @@ module Make (Log : Logs.LOG) (S : S) = struct
               let post = if on then incr pre else pre in
               (* check pre-condition *)
               check `Pre (n - i) pre_w pre >>= fun () ->
-              Log.debug (fun f ->
-                  f "[waiting for] %s" (msg `Post (n - i) post_w post));
+              [%log.debug "[waiting for] %s" (msg `Post (n - i) post_w post)];
               fn (n - i) >>= fun () ->
               (* check post-condition *)
               check `Post (n - i) post_w post >>= fun () -> aux post (i - 1)
@@ -248,7 +247,7 @@ module Make (Log : Logs.LOG) (S : S) = struct
       let* t1 = S.master repo1 in
       let* repo = S.Repo.v x.config in
       let* t2 = S.master repo in
-      Log.debug (fun f -> f "WATCH");
+      [%log.debug "WATCH"];
       let state = State.empty () in
       let sleep_t = 0.02 in
       let process = State.process ~sleep_t state in
@@ -282,17 +281,17 @@ module Make (Log : Logs.LOG) (S : S) = struct
       Lwt_list.iter_s (fun f -> S.unwatch f) !stops_1 >>= fun () ->
       S.set_exn t1 ~info:(infof "update") [ "a" ] v2 >>= fun () ->
       State.check "watches off" (0, 0) (150, 100, 100) state >>= fun () ->
-      Log.debug (fun f -> f "WATCH-ALL");
+      [%log.debug "WATCH-ALL"];
       let state = State.empty () in
       let* head = r1 ~repo in
       let add =
         State.apply "branch-watch-all" state `Add (fun n ->
-            let tag = Fmt.strf "t%d" n in
+            let tag = Fmt.str "t%d" n in
             S.Branch.set repo tag head)
       in
       let remove =
         State.apply "branch-watch-all" state `Remove (fun n ->
-            let tag = Fmt.strf "t%d" n in
+            let tag = Fmt.str "t%d" n in
             S.Branch.remove repo tag)
       in
       let* master = S.Branch.get repo "master" in
@@ -305,7 +304,7 @@ module Make (Log : Logs.LOG) (S : S) = struct
       S.unwatch u >>= fun () ->
       add false (10, 0, 5) 4 >>= fun () ->
       remove false (10, 0, 5) 4 >>= fun () ->
-      Log.debug (fun f -> f "WATCH-KEY");
+      [%log.debug "WATCH-KEY"];
       let state = State.empty () in
       let path1 = [ "a"; "b"; "c" ] in
       let path2 = [ "a"; "d" ] in
@@ -343,7 +342,7 @@ module Make (Log : Logs.LOG) (S : S) = struct
       add false (1, 10, 1) 3 >>= fun () ->
       update false (1, 10, 1) 5 >>= fun () ->
       remove false (1, 10, 1) 4 >>= fun () ->
-      Log.debug (fun f -> f "WATCH-MORE");
+      [%log.debug "WATCH-MORE"];
       let state = State.empty () in
       let update =
         State.apply "watch-more" state `Update (fun n ->

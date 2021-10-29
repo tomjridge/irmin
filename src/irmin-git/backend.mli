@@ -30,11 +30,14 @@ module Make
   type t := bool ref * G.t
 
   include
-    Irmin.Private.S
+    Irmin.Backend.S
       with module Schema = Schema
       with type 'a Contents.t = t
        and type 'a Node.t = t * t
        and type 'a Commit.t = (t * t) * t
+       and type Contents.key = G.hash
+       and type Node.key = G.hash
+       and type Commit.key = G.hash
        and type Remote.endpoint = Mimic.ctx * Smart_git.Endpoint.t
 
   val git_of_repo : Repo.t -> G.t

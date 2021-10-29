@@ -32,7 +32,7 @@ module type S = sig
   module Schema :
     Irmin.Schema.S with type Metadata.t = Metadata.t and type Hash.t = Git.hash
 
-  include Irmin.S with module Schema := Schema
+  include Irmin.S with type hash = Schema.Hash.t and module Schema := Schema
 
   val git_commit : Repo.t -> commit -> Git.Value.Commit.t option Lwt.t
   (** [git_commit repo h] is the commit corresponding to [h] in the repository
@@ -65,7 +65,7 @@ module type Maker = sig
     S
       with module Git = G
        and module Schema := Schema
-       and type Private.Remote.endpoint = endpoint
+       and type Backend.Remote.endpoint = endpoint
 end
 
 module type KV_maker = sig
@@ -84,7 +84,7 @@ module type KV_maker = sig
        and type Schema.Path.t = string list
        and type Schema.Hash.t = G.hash
        and type Schema.Branch.t = branch
-       and type Private.Remote.endpoint = endpoint
+       and type Backend.Remote.endpoint = endpoint
 end
 
 module type Sigs = sig

@@ -20,43 +20,49 @@ open Astring
 
 let global_option_section = "COMMON OPTIONS"
 
-module Conf = Irmin.Private.Conf
+module Conf = Irmin.Backend.Conf
+
+let value_or_option ty v =
+  match Irmin.Type.of_string ty v with
+  | Error e -> (
+      let x = Format.sprintf "{\"some\": %s}" v in
+      match Irmin.Type.of_string ty x with
+      | Error _ ->
+          let y = Format.sprintf "{\"some\": \"%s\"}" v in
+          Irmin.Type.of_string ty y |> Result.map_error (fun _ -> e)
+      | v -> v)
+  | v -> v
 
 let pconv t =
   let pp = Irmin.Type.pp t in
   let parse s =
-    match Irmin.Type.of_string t s with
-    | Ok x -> `Ok x
-    | Error (`Msg e) -> `Error e
+    match value_or_option t s with Ok x -> `Ok x | Error (`Msg e) -> `Error e
   in
   (parse, pp)
 
-let key k default =
-  let doc = Conf.doc k in
-  let docs = Conf.docs k in
-  let docv = Conf.docv k in
-  let mk = pconv (Conf.ty k) in
-  let name = Conf.name k in
-  let i = Arg.info ?docv ?doc ?docs [ name ] in
-  Arg.(value & opt mk default i)
+let config_path_term =
+  let name = "config" in
+  let doc = "Allows configuration file to be specified on the command-line." in
+  let docv = "PATH" in
+  let docs = "COMMON OPTIONS" in
+  let mk = pconv Irmin.Type.(option string) in
+  let i = Arg.info ~docv ~docs ~doc [ name ] in
+  Arg.(value & opt mk None i)
 
-let opt_key k = key k (Conf.default k)
-let spec' = Conf.Spec.(join (v "unix") [ Irmin_http.Conf.spec ])
-
-let config_path_key =
-  Conf.key ~spec:spec' ~docs:global_option_section ~docv:"PATH"
-    ~doc:"Allows configuration file to be specified on the command-line."
-    "config"
-    Irmin.Type.(option string)
-    None
+let root_term =
+  let name = "root" in
+  let doc = "The location of the Irmin store on disk." in
+  let docv = "PATH" in
+  let docs = "COMMON OPTIONS" in
+  let mk = pconv Irmin.Type.(option string) in
+  let i = Arg.info ~docv ~docs ~doc [ name ] in
+  Arg.(value & opt mk None i)
 
 let ( / ) = Filename.concat
 let global_config_path = "irmin" / "config.yml"
 
 let add_opt k v config =
   match v with None -> config | Some _ -> Conf.add config k v
-
-let add k v config = Conf.add config k v
 
 (* Contents *)
 
@@ -92,7 +98,7 @@ module Contents = struct
     let content_types = !all |> List.map (fun (name, _) -> (name, name)) in
     let kind =
       let doc =
-        Fmt.strf "The type of user-defined contents (%s). Default is `%s'."
+        Fmt.str "The type of user-defined contents (%s). Default is `%s'."
           (Arg.doc_alts_enum content_types)
           (fst !default)
       in
@@ -170,8 +176,7 @@ module Hash = struct
     | Some (hashname, size) -> (
         match int_of_string_opt size with
         | Some size -> Ok (hashname, Some size)
-        | None -> Error (`Msg (Fmt.strf "Non-numeric hash size %s passed" size))
-        )
+        | None -> Error (`Msg (Fmt.str "Non-numeric hash size %s passed" size)))
     | None -> Ok (hashname, None))
     >>= fun (hashname, size_opt) ->
     match (find_hashfn hashname, size_opt) with
@@ -180,8 +185,7 @@ module Hash = struct
     | Fixed _, Some size ->
         Error
           (`Msg
-            (Fmt.strf
-               "Cannot specify a size for hash function `%s' (%d passed)."
+            (Fmt.str "Cannot specify a size for hash function `%s' (%d passed)."
                hashname size))
 
   let find h =
@@ -191,7 +195,7 @@ module Hash = struct
 
   let term =
     let kind =
-      let quote s = Fmt.strf "`%s'" s in
+      let quote s = Fmt.str "`%s'" s in
       let hash_types = !all |> List.map (fun (name, _) -> (name, name)) in
       let variable_size_types =
         !all
@@ -206,7 +210,7 @@ module Hash = struct
           | [ h ] -> quote h
           | hs ->
               let rev_hs = List.rev hs in
-              Fmt.strf "%s and %s"
+              Fmt.str "%s and %s"
                 (String.concat ~sep:", " (List.rev_map quote (List.tl rev_hs)))
                 (quote (List.hd rev_hs)))
       in
@@ -223,7 +227,7 @@ module Hash = struct
               pp_plural hs pp_prose_list hs (List.hd hs)
       in
       let doc =
-        Fmt.strf "The hash function (%s). Default is `%s'.%a"
+        Fmt.str "The hash function (%s). Default is `%s'.%a"
           (Arg.doc_alts_enum hash_types)
           (fst !default) pp_variable_size_doc variable_size_types
       in
@@ -245,7 +249,7 @@ module Store = struct
     ?ctx:Mimic.ctx -> ?headers:Cohttp.Header.t -> string -> Irmin.remote
 
   type t =
-    | T : (module Irmin.S) * Irmin.Private.Conf.Spec.t * remote_fn option -> t
+    | T : (module Irmin.S) * Irmin.Backend.Conf.Spec.t * remote_fn option -> t
 
   let destruct (T (a, b, c)) = (a, b, c)
 
@@ -263,7 +267,7 @@ module Store = struct
   let v_git (module S : G) = v Irmin_git.Conf.spec (module S) ~remote:S.remote
 
   let create :
-      Irmin.Private.Conf.Spec.t -> (module Irmin.Maker) -> hash -> contents -> t
+      Irmin.Backend.Conf.Spec.t -> (module Irmin.Maker) -> hash -> contents -> t
       =
    fun spec (module S) (module H) (module C) ->
     let module S = S.Make (Irmin.Schema.KV (C)) in
@@ -276,18 +280,27 @@ module Store = struct
     | T ((module S), spec, x) ->
         T
           ( (module Http.Client (S)),
-            Irmin.Private.Conf.Spec.join spec [ Irmin_http.Conf.spec ],
+            Irmin.Backend.Conf.Spec.join spec [ Irmin_http.Conf.spec ],
             x )
 
   let git (module C : Irmin.Contents.S) = v_git (module Xgit.FS.KV (C))
   let git_mem (module C : Irmin.Contents.S) = v_git (module Xgit.Mem.KV (C))
 
-  module Inode_config = struct
-    let entries = 32
-    let stable_hash = 256
+  module Irmin_pack_maker : Irmin.Maker = struct
+    include Irmin_pack.V1 (struct
+      let entries = 32
+      let stable_hash = 256
+    end)
+
+    module Make (Schema : Irmin.Schema.S) = Make (struct
+      include Schema
+      module Node = Irmin.Node.Generic_key.Make (Hash) (Path) (Metadata)
+      module Commit_maker = Irmin.Commit.Generic_key.Maker (Info)
+      module Commit = Commit_maker.Make (Hash)
+    end)
   end
 
-  let pack = create Irmin_pack.Conf.spec (module Irmin_pack.V1 (Inode_config))
+  let pack = create Irmin_pack.Conf.spec (module Irmin_pack_maker)
 
   let all =
     ref
@@ -323,7 +336,7 @@ module Store = struct
     let store =
       let store_types = !all |> List.map (fun (name, _) -> (name, name)) in
       let doc =
-        Fmt.strf "The storage backend (%s). Default is `%s'."
+        Fmt.str "The storage backend (%s). Default is `%s'."
           (Arg.doc_alts_enum store_types)
           (fst !default)
       in
@@ -365,7 +378,7 @@ let rec read_config_file path =
   in
   if not (Sys.file_exists path) then global
   else
-    let () = Logs.debug (fun f -> f "Loading config from file: %s" path) in
+    let () = [%logs.debug "Loading config from file: %s" path] in
     let oc = open_in path in
     let len = in_channel_length oc in
     let buf = really_input_string oc len in
@@ -375,17 +388,13 @@ let rec read_config_file path =
     | Ok _ -> Fmt.failwith "invalid YAML file: %s" path
     | Error (`Msg msg) -> Fmt.failwith "unable to parse YAML: %s" msg
 
-let root_key = Conf.root spec'
-
 let config_term =
   let create root config_path (opts : (string * string) list list) =
-    let config =
-      Conf.empty spec' |> add root_key root |> add config_path_key config_path
-    in
-    (config, opts)
+    (root, config_path, opts)
   in
+  let spec = Conf.Spec.(join (v "unix") [ Irmin_http.Conf.spec ]) in
   let doc =
-    Seq.map (fun (Irmin.Private.Conf.K x) -> Conf.name x) (Conf.Spec.keys spec')
+    Seq.map (fun (Irmin.Backend.Conf.K x) -> Conf.name x) (Conf.Spec.keys spec)
     |> List.of_seq
     |> String.concat ~sep:", "
   in
@@ -396,8 +405,8 @@ let config_term =
   in
   Term.(
     const create
-    $ opt_key root_key
-    $ opt_key config_path_key
+    $ root_term
+    $ config_path_term
     $ Arg.(value @@ opt_all (list (pair ~sep:'=' string string)) [] opts))
 
 type store =
@@ -415,26 +424,32 @@ let rec json_of_yaml : Yaml.value -> Yojson.Basic.t = function
   | `A x -> `List (List.map json_of_yaml x)
   | (`Null | `Bool _ | `Float _ | `String _) as x -> x
 
-let load_config_file_with_defaults path (store, hash, contents) config =
-  let y = read_config_file path in
+let load_config_file_with_defaults root config_path (store, hash, contents) =
+  let y = read_config_file config_path in
   let store =
-    match List.assoc_opt "store" y with
-    | Some (`String s) -> Store.find s
-    | _ -> (
-        match store with Some s -> Store.find s | None -> snd !Store.default)
+    match store with
+    | Some s -> Store.find s
+    | None -> (
+        match List.assoc_opt "store" y with
+        | Some (`String s) -> (
+            match store with Some s -> Store.find s | None -> Store.find s)
+        | _ -> snd !Store.default)
   in
   let contents =
-    match List.assoc_opt "contents" y with
-    | Some (`String s) -> Contents.find s
-    | _ -> (
-        match contents with
-        | Some s -> Contents.find s
-        | None -> snd !Contents.default)
+    match contents with
+    | Some s -> Contents.find s
+    | None -> (
+        match List.assoc_opt "contents" y with
+        | Some (`String s) -> Contents.find s
+        | _ -> snd !Contents.default)
   in
   let hash =
-    match List.assoc_opt "hash" y with
-    | Some (`String s) -> Some (Hash.find s)
-    | _ -> ( match hash with Some s -> Some s | None -> None)
+    match hash with
+    | Some s -> Some s
+    | None -> (
+        match List.assoc_opt "hash" y with
+        | Some (`String s) -> Some (Hash.find s)
+        | _ -> None)
   in
   let store =
     match store with
@@ -450,11 +465,12 @@ let load_config_file_with_defaults path (store, hash, contents) config =
               "Cannot customize the hash function for the given store")
   in
   let _, spec, _ = Store.destruct store in
+  let config = Conf.empty spec in
   let config =
     List.fold_left
       (fun config (k, v) ->
         match Conf.Spec.find_key spec k with
-        | Some (Irmin.Private.Conf.K k) ->
+        | Some (Irmin.Backend.Conf.K k) ->
             let v = json_of_yaml v |> Yojson.Basic.to_string in
             let v =
               match Irmin.Type.of_json_string (Conf.ty k) v with
@@ -470,23 +486,29 @@ let load_config_file_with_defaults path (store, hash, contents) config =
             | _ ->
                 Fmt.invalid_arg "unknown config key for %s: %s"
                   (Conf.Spec.name spec) k))
-      (Conf.with_spec config spec)
-      y
+      config y
+  in
+  let config =
+    match (root, Conf.Spec.find_key spec "root") with
+    | Some root, Some (K r) ->
+        let v = Irmin.Type.of_string (Conf.ty r) root |> Result.get_ok in
+        Conf.add config r v
+    | _ -> config
   in
   (store, config)
 
-let from_config_file_with_defaults path (store, hash, contents) config opts
+let from_config_file_with_defaults root config_path (store, hash, contents) opts
     branch : store =
-  let y = read_config_file path in
+  let y = read_config_file config_path in
   let store, config =
-    load_config_file_with_defaults path (store, hash, contents) config
+    load_config_file_with_defaults root config_path (store, hash, contents)
   in
   match store with
   | Store.T ((module S), spec, remote) -> (
       let config =
         List.fold_left
           (fun config (k, v) ->
-            let (Irmin.Private.Conf.K key) =
+            let (Irmin.Backend.Conf.K key) =
               if k = "root" then
                 invalid_arg
                   "use the --root flag to set the root directory instead of \
@@ -497,22 +519,12 @@ let from_config_file_with_defaults path (store, hash, contents) config opts
                 | None -> invalid_arg ("opt: " ^ k)
             in
             let ty = Conf.ty key in
-            let v =
-              match Irmin.Type.of_string ty v with
-              | Error _ -> (
-                  let x = Format.sprintf "{\"some\": %s}" v in
-                  match Irmin.Type.of_string (Conf.ty key) x with
-                  | Error _ ->
-                      let y = Format.sprintf "{\"some\": \"%s\"}" v in
-                      Irmin.Type.of_string (Conf.ty key) y |> Result.get_ok
-                  | Ok v -> v)
-              | Ok v -> v
-            in
+            let v = value_or_option ty v |> Result.get_ok in
             let config = Conf.add config key v in
             config)
           config (List.flatten opts)
       in
-      let mk_master () = S.Repo.v config >>= fun repo -> S.master repo in
+      let mk_master () = S.Repo.v config >>= S.master in
       let mk_branch b = S.Repo.v config >>= fun repo -> S.of_branch repo b in
       let branch =
         let of_string = Irmin.Type.of_string S.Branch.t in
@@ -531,14 +543,8 @@ let from_config_file_with_defaults path (store, hash, contents) config opts
       | None -> S ((module S), mk_master (), remote)
       | Some b -> S ((module S), mk_branch b, remote))
 
-let load_config ?(default = Conf.empty spec') ?config_path ?store ?hash
-    ?contents () =
-  let cfg =
-    match config_path with
-    | Some _ as p -> p
-    | None -> Conf.get default config_path_key
-  in
-  load_config_file_with_defaults cfg (store, hash, contents) default
+let load_config ?root ?config_path ?store ?hash ?contents () =
+  load_config_file_with_defaults root config_path (store, hash, contents)
 
 let branch =
   let doc =
@@ -549,9 +555,8 @@ let branch =
   Arg.(value & opt (some string) None & doc)
 
 let store =
-  let create store (config, opts) branch =
-    let cfg = Conf.get config config_path_key in
-    from_config_file_with_defaults cfg store config opts branch
+  let create store (root, config_path, opts) branch =
+    from_config_file_with_defaults root config_path store opts branch
   in
   Term.(const create $ Store.term $ config_term $ branch)
 
@@ -592,7 +597,13 @@ let infer_remote hash contents headers str =
         let config =
           Conf.empty spec
           |> add_opt Irmin_http.Conf.Key.uri (Some (Uri.of_string str))
-          |> add root_key str
+        in
+        let config =
+          match Conf.Spec.find_key spec "root" with
+          | Some (K r) ->
+              let v = Irmin.Type.of_string (Conf.ty r) str |> Result.get_ok in
+              Conf.add config r v
+          | _ -> config
         in
         let* repo = R.Repo.v config in
         let+ r = R.master repo in

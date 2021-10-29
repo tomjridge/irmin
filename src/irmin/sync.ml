@@ -19,18 +19,19 @@ include Sync_intf
 
 module type REMOTE = Remote.S
 
-let invalid_argf fmt = Fmt.kstrf Lwt.fail_invalid_arg fmt
+let invalid_argf fmt = Fmt.kstr Lwt.fail_invalid_arg fmt
 let src = Logs.Src.create "irmin.sync" ~doc:"Irmin remote sync"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
 let remote_store m x = Store.Store (m, x)
 
-module Make (S : Store.S) = struct
-  module B = S.Private.Remote
+module Make (S : Store.Generic_key.S) = struct
+  module B = S.Backend.Remote
 
   type db = S.t
   type commit = S.commit
+  type commit_key = S.commit_key [@@deriving irmin ~pp]
   type info = S.info
 
   let conv dx dy =
@@ -38,17 +39,17 @@ module Make (S : Store.S) = struct
     let dy_of_bin_string = Type.(unstage (of_bin_string dy)) in
     Type.stage (fun x -> dy_of_bin_string (dx_to_bin_string x))
 
-  let convert_slice (type r s) (module RP : Private.S with type Slice.t = r)
-      (module SP : Private.S with type Slice.t = s) r =
+  let convert_slice (type r s) (module RP : Backend.S with type Slice.t = r)
+      (module SP : Backend.S with type Slice.t = s) r =
     let conv_contents_k =
-      Type.unstage (conv RP.Contents.Key.t SP.Contents.Key.t)
+      Type.unstage (conv RP.Contents.Hash.t SP.Contents.Hash.t)
     in
     let conv_contents_v =
       Type.unstage (conv RP.Contents.Val.t SP.Contents.Val.t)
     in
-    let conv_node_k = Type.unstage (conv RP.Node.Key.t SP.Node.Key.t) in
+    let conv_node_k = Type.unstage (conv RP.Node.Hash.t SP.Node.Hash.t) in
     let conv_node_v = Type.unstage (conv RP.Node.Val.t SP.Node.Val.t) in
-    let conv_commit_k = Type.unstage (conv RP.Commit.Key.t SP.Commit.Key.t) in
+    let conv_commit_k = Type.unstage (conv RP.Commit.Hash.t SP.Commit.Hash.t) in
     let conv_commit_v = Type.unstage (conv RP.Commit.Val.t SP.Commit.Val.t) in
     let* s = SP.Slice.empty () in
     let* () =
@@ -81,13 +82,12 @@ module Make (S : Store.S) = struct
       [] l
 
   let pp_branch = Type.pp S.Branch.t
-  let pp_hash = Type.pp S.Hash.t
 
   type status = [ `Empty | `Head of commit ]
 
   let pp_status ppf = function
     | `Empty -> Fmt.string ppf "empty"
-    | `Head c -> Type.pp S.Hash.t ppf (S.Commit.hash c)
+    | `Head c -> S.Commit.pp_hash ppf c
 
   let status_t t =
     let open Type in
@@ -100,7 +100,7 @@ module Make (S : Store.S) = struct
   let fetch t ?depth remote =
     match remote with
     | Store.Store ((module R), r) -> (
-        Log.debug (fun f -> f "fetch store");
+        [%log.debug "fetch store"];
         let s_repo = S.repo t in
         let r_repo = R.repo r in
         let conv =
@@ -115,7 +115,7 @@ module Make (S : Store.S) = struct
               R.Repo.export (R.repo r) ?depth ~min ~max:(`Max [ h ])
             in
             let* s_slice =
-              convert_slice (module R.Private) (module S.Private) r_slice
+              convert_slice (module R.Backend) (module S.Backend) r_slice
             in
             S.Repo.import s_repo s_slice >|= function
             | Error e -> Error e
@@ -125,13 +125,13 @@ module Make (S : Store.S) = struct
         match S.status t with
         | `Empty | `Commit _ -> Lwt.return (Ok `Empty)
         | `Branch br -> (
-            Log.debug (fun l -> l "Fetching branch %a" pp_branch br);
+            [%log.debug "Fetching branch %a" pp_branch br];
             let* g = B.v (S.repo t) in
             B.fetch g ?depth e br >>= function
             | Error _ as e -> Lwt.return e
-            | Ok (Some c) -> (
-                Log.debug (fun l -> l "Fetched %a" pp_hash c);
-                S.Commit.of_hash (S.repo t) c >|= function
+            | Ok (Some key) -> (
+                [%log.debug "Fetched %a" pp_commit_key key];
+                S.Commit.of_key (S.repo t) key >|= function
                 | None -> Ok `Empty
                 | Some x -> Ok (`Head x))
             | Ok None -> (
@@ -175,13 +175,13 @@ module Make (S : Store.S) = struct
     | `Detached_head -> Fmt.string ppf "cannot push to a non-persistent store"
 
   let push t ?depth remote =
-    Log.debug (fun f -> f "push");
+    [%log.debug "push"];
     match remote with
     | Store.Store ((module R), r) -> (
         S.Head.find t >>= function
         | None -> Lwt.return (Ok `Empty)
         | Some h -> (
-            Log.debug (fun f -> f "push store");
+            [%log.debug "push store"];
             let* min = R.Repo.heads (R.repo r) in
             let r_repo = R.repo r in
             let s_repo = S.repo t in
@@ -191,7 +191,7 @@ module Make (S : Store.S) = struct
             in
             let* s_slice = S.Repo.export (S.repo t) ?depth ~min in
             let* r_slice =
-              convert_slice (module S.Private) (module R.Private) s_slice
+              convert_slice (module S.Backend) (module R.Backend) s_slice
             in
             R.Repo.import (R.repo r) r_slice >>= function
             | Error e -> Lwt.return (Error (e :> push_error))

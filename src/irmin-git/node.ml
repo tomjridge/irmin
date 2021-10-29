@@ -17,15 +17,18 @@
 open Import
 
 module Make (G : Git.S) (P : Irmin.Path.S) = struct
-  module Key = Irmin.Hash.Make (G.Hash)
+  module Hash = Irmin.Hash.Make (G.Hash)
+  module Key = Irmin.Key.Of_hash (Hash)
   module Raw = Git.Value.Make (G.Hash)
   module Path = P
   module Metadata = Metadata
 
   type t = G.Value.Tree.t
   type metadata = Metadata.t [@@deriving irmin]
-  type hash = Key.t [@@deriving irmin]
+  type hash = Hash.t [@@deriving irmin]
   type step = Path.step [@@deriving irmin]
+  type node_key = hash [@@deriving irmin]
+  type contents_key = hash [@@deriving irmin]
 
   type value = [ `Node of hash | `Contents of hash * metadata ]
   [@@deriving irmin]
@@ -40,7 +43,7 @@ module Make (G : Git.S) (P : Irmin.Path.S) = struct
 
   exception Exit of (step * value) list
 
-  let list ?(offset = 0) ?length t =
+  let list ?(offset = 0) ?length ?cache:_ t =
     let t = G.Value.Tree.to_list t in
     let length = match length with None -> List.length t | Some n -> n in
     try
@@ -58,7 +61,7 @@ module Make (G : Git.S) (P : Irmin.Path.S) = struct
       |> fun (_, acc) -> List.rev acc
     with Exit acc -> List.rev acc
 
-  let find t s =
+  let find ?cache:_ t s =
     let s = of_step s in
     let rec aux = function
       | [] -> None
@@ -128,27 +131,32 @@ module Make (G : Git.S) (P : Irmin.Path.S) = struct
         | { Git.Tree.perm = `Commit; name; _ } ->
             (* Irmin does not support Git submodules; do not follow them,
                just consider *)
-            Log.warn (fun l -> l "skipping Git submodule: %s" name);
+            [%log.warn "skipping Git submodule: %s" name];
             acc
         | { Git.Tree.perm = #Metadata.t as perm; name; node; _ } ->
             (to_step name, mk_c node perm) :: acc)
       [] (G.Value.Tree.to_list t)
     |> List.rev
 
-  module N = Irmin.Node.Make (Key) (P) (Metadata)
+  module N = Irmin.Node.Make (Hash) (P) (Metadata)
 
-  let to_n t = N.v (alist t)
+  let to_n t = N.of_list (alist t)
   let of_n n = v (N.list n)
   let to_bin t = Raw.to_raw (G.Value.tree t)
+  let of_list = v
+  let of_seq seq = List.of_seq seq |> v
 
-  let encode_bin =
-    Irmin.Type.stage @@ fun (t : t) k ->
-    Log.debug (fun l -> l "Tree.encode_bin");
+  let seq ?offset ?length ?cache t =
+    list ?offset ?length ?cache t |> List.to_seq
+
+  let clear _ = ()
+
+  let encode_bin (t : t) k =
+    [%log.debug "Tree.encode_bin"];
     k (to_bin t)
 
-  let decode_bin =
-    Irmin.Type.stage @@ fun buf off ->
-    Log.debug (fun l -> l "Tree.decode_bin");
+  let decode_bin buf off =
+    [%log.debug "Tree.decode_bin"];
     match Raw.of_raw_with_header buf ~off with
     | Ok (Git.Value.Tree t) -> (String.length buf, t)
     | Ok _ -> failwith "wrong object kind"

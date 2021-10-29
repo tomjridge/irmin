@@ -27,33 +27,33 @@ module Make (G : Git.S) (V : Value.S with type value := G.Value.t) = struct
 
   let handle_git_err = function
     | Ok x -> Lwt.return x
-    | Error e -> Fmt.kstrf Lwt.fail_with "%a" G.pp_error e
+    | Error e -> Fmt.kstr Lwt.fail_with "%a" G.pp_error e
 
   type 'a t = G.t
   type key = H.t [@@deriving irmin ~pp ~equal]
   type value = V.t
 
   let mem t key =
-    Log.debug (fun l -> l "mem %a" pp_key key);
+    [%log.debug "mem %a" pp_key key];
     G.mem t key >>= function
     | false -> Lwt.return_false
     | true -> (
         G.read t key >>= function
         | Error (`Reference_not_found _ | `Not_found _) -> Lwt.return_false
-        | Error e -> Fmt.kstrf Lwt.fail_with "%a" G.pp_error e
+        | Error e -> Fmt.kstr Lwt.fail_with "%a" G.pp_error e
         | Ok v -> Lwt.return (V.type_eq (G.Value.kind v)))
 
   let find t key =
-    Log.debug (fun l -> l "find %a" pp_key key);
+    [%log.debug "find %a" pp_key key];
     G.read t key >>= function
     | Error (`Reference_not_found _ | `Not_found _) -> Lwt.return_none
-    | Error e -> Fmt.kstrf Lwt.fail_with "%a" G.pp_error e
+    | Error e -> Fmt.kstr Lwt.fail_with "%a" G.pp_error e
     | Ok v -> Lwt.return (V.of_git v)
 
   let add t v =
     let v = V.to_git v in
     let* k, _ = G.write t v >>= handle_git_err in
-    Log.debug (fun l -> l "add %a" pp_key k);
+    [%log.debug "add %a" pp_key k];
     Lwt.return k
 
   let unsafe_add t k v =
@@ -65,7 +65,7 @@ module Make (G : Git.S) (V : Value.S with type value := G.Value.t) = struct
         pp_key k pp_key k'
 
   let clear t =
-    Log.debug (fun l -> l "clear");
+    [%log.debug "clear"];
     Lwt_mutex.with_lock reset_lock (fun () -> G.reset t) >>= handle_git_err
 
   let batch t f = f t

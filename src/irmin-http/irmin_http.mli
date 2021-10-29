@@ -19,7 +19,7 @@
 val config : Uri.t -> Irmin.config -> Irmin.config
 
 module Conf : sig
-  open Irmin.Private.Conf
+  open Irmin.Backend.Conf
 
   val spec : Spec.t
 
@@ -35,7 +35,10 @@ module type HTTP_CLIENT = sig
 end
 
 module Client (C : HTTP_CLIENT) (S : Irmin.S) :
-  Irmin.S with module Schema = S.Schema and type Private.Remote.endpoint = unit
+  Irmin.S
+    with type hash = S.hash
+     and module Schema = S.Schema
+     and type Backend.Remote.endpoint = unit
 
 (** HTTP server *)
 

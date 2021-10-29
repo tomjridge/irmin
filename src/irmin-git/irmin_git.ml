@@ -38,8 +38,8 @@ struct
                    and type Node.t = G.Value.Tree.t
                    and type Commit.t = G.Value.Commit.t) =
   struct
-    module P = Private.Make (G) (S) (Schema)
-    include Irmin.Of_private (P)
+    module P = Backend.Make (G) (S) (Schema)
+    include Irmin.Of_backend (P)
 
     let git_of_repo = P.git_of_repo
     let repo_of_git = P.repo_of_git
@@ -123,11 +123,11 @@ module Content_addressable (G : Git.S) = struct
 
     module Schema = Schema.Make (G) (V) (Reference)
     module M = Maker.Make (Schema)
-    module X = M.Private.Contents
+    module X = M.Backend.Contents
 
     let state t =
       let+ r = M.repo_of_git (snd t) in
-      M.Private.Repo.contents_t r
+      M.Backend.Repo.contents_t r
 
     type 'a t = bool ref * G.t
     type key = X.key
@@ -185,10 +185,12 @@ module KV
 struct
   module Maker = Maker (G) (S)
   module Branch = Branch.Make (Irmin.Branch.String)
+  include Irmin.Key.Store_spec.Hash_keyed
 
   type endpoint = Maker.endpoint
   type metadata = Metadata.t
   type branch = Branch.t
+  type hash = G.hash
 
   module Make (C : Irmin.Contents.S) = Maker.Make (Schema.Make (G) (C) (Branch))
 end
@@ -216,6 +218,9 @@ struct
 
   type endpoint = unit
   type metadata = Metadata.t
+  type hash = G.hash
+
+  include Irmin.Key.Store_spec.Hash_keyed
 
   module Schema (C : Irmin.Contents.S) = struct
     module Metadata = Metadata
@@ -237,7 +242,7 @@ struct
       module G = Mem
       module Maker = Maker (G) (No_sync)
       module S = Maker.Make (Sc)
-      include S.Private
+      include S.Backend
     end
 
     module CA = Irmin.Content_addressable.Check_closed (CA)
@@ -247,6 +252,7 @@ struct
       module Schema = Sc
       module Hash = Dummy.Hash
       module Info = Irmin.Info.Default
+      module Key = Irmin.Key.Of_hash (Hash)
 
       module Contents = struct
         module V = Dummy.Contents.Val
@@ -263,8 +269,19 @@ struct
             (Schema.Path)
       end
 
+      module Node_portable = struct
+        include Node.Val
+
+        let of_node x = x
+      end
+
       module Commit = struct
-        module V = Dummy.Commit.Val
+        module V = struct
+          include Dummy.Commit.Val
+
+          type hash = Hash.t [@@deriving irmin]
+        end
+
         module CA = CA (Hash) (V)
         include Irmin.Commit.Store (Info) (Node) (CA) (Hash) (V)
       end
@@ -276,7 +293,7 @@ struct
       end
 
       module Slice = Dummy.Slice
-      module Remote = Irmin.Private.Remote.None (Branch.Val) (Branch.Key)
+      module Remote = Irmin.Backend.Remote.None (Branch.Val) (Branch.Key)
 
       module Repo = struct
         (* FIXME: remove duplication with irmin.mli *)
@@ -318,7 +335,7 @@ struct
       end
     end
 
-    include Irmin.Of_private (X)
+    include Irmin.Of_backend (X)
   end
 end
 

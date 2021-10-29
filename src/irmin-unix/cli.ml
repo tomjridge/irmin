@@ -131,7 +131,7 @@ let http =
                   | None -> (Uri.with_host uri (Some "Listener"), "Listener")
                   | Some name -> (uri, name)
                 in
-                Logs.info (fun f -> f "daemon: %s" (Uri.to_string uri));
+                [%logs.info "daemon: %s" (Uri.to_string uri)];
                 Cohttp_lwt_unix.Server.create ~timeout:3600
                   ~mode:(`Launchd name) spec
             | _ ->
@@ -145,7 +145,7 @@ let http =
                   | None -> (8080, Uri.with_port uri (Some 8080))
                   | Some p -> (p, uri)
                 in
-                Logs.info (fun f -> f "daemon: %s" (Uri.to_string uri));
+                [%logs.info "daemon: %s" (Uri.to_string uri)];
                 Printf.printf "Server starting on port %d.\n%!" port;
                 Cohttp_lwt_unix.Server.create ~timeout:3600
                   ~mode:(`TCP (`Port port))
@@ -154,12 +154,12 @@ let http =
        Term.(mk init $ store $ uri));
   }
 
-let print fmt = Fmt.kstrf print_endline fmt
+let print fmt = Fmt.kstr print_endline fmt
 
 let get name f x =
   match Irmin.Type.of_string f x with
   | Ok x -> x
-  | Error (`Msg e) -> Fmt.kstrf invalid_arg "invalid %s: %s" name e
+  | Error (`Msg e) -> Fmt.kstr invalid_arg "invalid %s: %s" name e
 
 let key f x = get "key" f x
 let value f x = get "value" f x
@@ -202,7 +202,7 @@ let list =
             let pp ppf (s, k) =
               match S.Tree.destruct k with
               | `Contents _ -> Fmt.pf ppf "FILE %a" pp_step s
-              | `Node _ -> Fmt.pf ppf "DIR  %a" pp_step s
+              | `Node _ -> Fmt.pf ppf "DIR %a" pp_step s
             in
             List.iter (print "%a" pp) paths;
             Lwt.return_unit)
@@ -502,10 +502,10 @@ let watch =
                   let view (c, _) =
                     let* t = S.of_commit c in
                     S.find_tree t path >|= function
-                    | None -> S.Tree.empty
+                    | None -> S.Tree.empty ()
                     | Some v -> v
                   in
-                  let empty = Lwt.return S.Tree.empty in
+                  let empty = Lwt.return (S.Tree.empty ()) in
                   let x, y =
                     match d with
                     | `Updated (x, y) -> (view x, view y)
@@ -581,16 +581,14 @@ let dot =
             if call_dot then (
               let i = Sys.command "/bin/sh -c 'command -v dot'" in
               if i <> 0 then
-                Logs.err (fun f ->
-                    f
-                      "Cannot find the `dot' utility. Please install it on \
-                       your system and be sure it is available in your $PATH.");
+                [%logs.err
+                  "Cannot find the `dot' utility. Please install it on your \
+                   system and be sure it is available in your $PATH."];
               let i =
                 Sys.command
                   (Printf.sprintf "dot -Tpng %s.dot -o%s.png" basename basename)
               in
-              if i <> 0 then
-                Logs.err (fun f -> f "The %s.dot is corrupted" basename));
+              if i <> 0 then [%logs.err "The %s.dot is corrupted" basename]);
             Lwt.return_unit)
        in
        Term.(mk dot $ store $ basename $ depth $ no_dot_call $ full));
@@ -615,9 +613,8 @@ let config_man =
          also be set using the $(b,--config) command-line flag or by setting \
          \\$XDG_CONFIG_HOME. \n\
         \        The following keys are allowed: $(b,contents), $(b,store), \
-         $(b,branch), $(b,root), $(b,bare), $(b,head), or $(b,uri). These \
-         correspond to the irmin options of the same names. Additionally, \
-         specific\n\
+         $(b,branch), $(b,root), $(b,bare) or $(b,head). These correspond to \
+         the irmin options of the same names. Additionally, specific\n\
         \         backends may have other options available, these can be \
          lised using the $(b,options)\n\
         \         command and applied using the $(b,--opt) flag.";
@@ -625,9 +622,8 @@ let config_man =
       `P
         "Here is an example $(b,irmin.yml) for accessing a local http irmin \
          store. This $(b,irmin.yml) prevents the user from having to specify \
-         the $(b,store) and $(b,uri) options for every command.";
-      `Pre
-        "    \\$ cat irmin.yml\n    store: http\n    uri: http://127.0.0.1:8080";
+         the $(b,store) and $(b,root) options for every command.";
+      `Pre "    \\$ cat irmin.yml\n    store: pack\n    root: /path/to/my/store";
     ]
     @ help_sections )
 
@@ -696,7 +692,7 @@ let graphql =
            let* ctx = Conduit_lwt_unix.init ~src:addr () in
            let ctx = Cohttp_lwt_unix.Net.init ~ctx () in
            let on_exn exn =
-             Logs.debug (fun l -> l "on_exn: %s" (Printexc.to_string exn))
+             [%logs.debug "on_exn: %s" (Printexc.to_string exn)]
            in
            Cohttp_lwt_unix.Server.create ~on_exn ~ctx
              ~mode:(`TCP (`Port port))
@@ -712,7 +708,7 @@ let options =
     man = [];
     term =
       (let options (store, hash, contents) =
-         let module Conf = Irmin.Private.Conf in
+         let module Conf = Irmin.Backend.Conf in
          let store, _ = Resolver.load_config ?store ?hash ?contents () in
          let _, spec, _ = Store.destruct store in
          Seq.iter

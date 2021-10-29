@@ -20,7 +20,9 @@ module IO = IO.Unix
 module Maker (V : Version.S) (Config : Conf.S) = struct
   type endpoint = unit
 
-  module Make (Schema : Irmin.Schema.S) = struct
+  include Irmin.Key.Store_spec.Hash_keyed
+
+  module Make (Schema : Irmin.Schema.Extended) = struct
     open struct
       module H = Schema.Hash
       module P = Schema.Path
@@ -32,6 +34,7 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
     module Index = Pack_index.Make (H)
     module Pack = Pack_store.Maker (V) (Index) (H)
     module Dict = Pack_dict.Make (V)
+    module XKey = Irmin.Key.Of_hash (H)
 
     module X = struct
       module Hash = H
@@ -46,13 +49,18 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
       end
 
       module Node = struct
+        module Value = Schema.Node (XKey) (XKey)
+
         module CA = struct
-          module Inter = Inode.Make_internal (Config) (H) (Schema.Node)
-          include Inode.Make_persistent (H) (Schema.Node) (Inter) (Pack)
+          module Inter = Inode.Make_internal (Config) (H) (Value)
+          include Inode.Make_persistent (H) (Value) (Inter) (Pack)
         end
 
-        include Irmin.Node.Store (Contents) (CA) (H) (CA.Val) (M) (P)
+        include
+          Irmin.Node.Generic_key.Store (Contents) (CA) (H) (CA.Val) (M) (P)
       end
+
+      module Node_portable = Node.CA.Val.Portable
 
       module Schema = struct
         include Schema
@@ -60,21 +68,31 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
       end
 
       module Commit = struct
+        module Value = struct
+          include Schema.Commit (Node.Key) (XKey)
+
+          type hash = Hash.t [@@deriving irmin]
+        end
+
         module Pack_value =
           Pack_value.Of_commit
             (H)
             (struct
               module Info = Schema.Info
-              include Schema.Commit
+              include Value
             end)
 
         module CA = Pack.Make (Pack_value)
-        include Irmin.Commit.Store (Schema.Info) (Node) (CA) (H) (Schema.Commit)
+        include Irmin.Commit.Store (Schema.Info) (Node) (CA) (H) (Value)
       end
 
       module Branch = struct
         module Key = B
-        module Val = H
+
+        module Val = struct
+          include H
+          include Commit.Key
+        end
 
         module AW =
           Atomic_write.Make_persistent (V) (Key)
@@ -86,12 +104,12 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
           AW.v ?fresh ?readonly path >|= make_closeable
       end
 
-      module Slice = Irmin.Private.Slice.Make (Contents) (Node) (Commit)
-      module Remote = Irmin.Private.Remote.None (H) (B)
+      module Slice = Irmin.Backend.Slice.Make (Contents) (Node) (Commit)
+      module Remote = Irmin.Backend.Remote.None (H) (B)
 
       module Repo = struct
         type t = {
-          config : Irmin.Private.Conf.t;
+          config : Irmin.Backend.Conf.t;
           contents : read Contents.CA.t;
           node : read Node.CA.t;
           commit : read Commit.CA.t;
@@ -152,9 +170,9 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
             (function
               | Version.Invalid { expected; found } as e
                 when expected = V.version ->
-                  Log.err (fun m ->
-                      m "[%s] Attempted to open store of unsupported version %a"
-                        (Conf.root config) Version.pp found);
+                  [%log.err
+                    "[%s] Attempted to open store of unsupported version %a"
+                      (Conf.root config) Version.pp found];
                   Lwt.fail e
               | e -> Lwt.fail e)
 
@@ -189,10 +207,10 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
       in
       Checks.integrity_check ?ppf ~auto_repair ~check t.index
 
-    include Irmin.Of_private (X)
+    include Irmin.Of_backend (X)
 
     let integrity_check_inodes ?heads t =
-      Log.debug (fun l -> l "Check integrity for inodes");
+      [%log.debug "Check integrity for inodes"];
       let bar, (_, progress_nodes, progress_commits) =
         Utils.Progress.increment ()
       in
@@ -218,9 +236,9 @@ module Maker (V : Version.S) (Config : Conf.S) = struct
       Utils.Progress.finalise bar;
       let pp_commits = Fmt.list ~sep:Fmt.comma Commit.pp_hash in
       if !errors = [] then
-        Fmt.kstrf (fun x -> Ok (`Msg x)) "Ok for heads %a" pp_commits heads
+        Fmt.kstr (fun x -> Ok (`Msg x)) "Ok for heads %a" pp_commits heads
       else
-        Fmt.kstrf
+        Fmt.kstr
           (fun x -> Error (`Msg x))
           "Inconsistent inodes found for heads %a: %a" pp_commits heads
           Fmt.(list ~sep:comma string)

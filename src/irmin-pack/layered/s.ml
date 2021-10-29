@@ -35,13 +35,19 @@ end
 module type Maker = sig
   type endpoint = unit
 
-  module Make (Schema : Irmin.Schema.S) :
-    Store
-      with module Schema = Schema
-       and type Private.Remote.endpoint = endpoint
-end
+  include Irmin.Key.Store_spec.Hash_keyed
 
-module Maker_is_a_maker (X : Maker) : Irmin.Maker = X
+  module Make (Schema : Irmin.Schema.Extended) :
+    Store
+      with type hash = Schema.Hash.t
+       and type Schema.Branch.t = Schema.Branch.t
+       and type Schema.Metadata.t = Schema.Metadata.t
+       and type Schema.Path.t = Schema.Path.t
+       and type Schema.Path.step = Schema.Path.step
+       and type Schema.Contents.t = Schema.Contents.t
+       and type Schema.Info.t = Schema.Info.t
+       and type Backend.Remote.endpoint = endpoint
+end
 
 module type Layered_general = sig
   type 'a t

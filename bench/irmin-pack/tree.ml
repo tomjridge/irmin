@@ -75,7 +75,7 @@ module Bench_suite (Store : Store) = struct
   module Info = Info (Store.Info)
 
   let init_commit repo =
-    Store.Commit.v repo ~info:(Info.f ()) ~parents:[] Store.Tree.empty
+    Store.Commit.v repo ~info:(Info.f ()) ~parents:[] (Store.Tree.empty ())
 
   module Trees = Generate_trees (Store)
   module Trace_replay = Trace_replay.Make (Store)
@@ -169,7 +169,7 @@ struct
 
   module Store = struct
     open Irmin_pack_layered.Maker (Conf)
-    include Make (Tezos_context_hash_irmin.Encoding)
+    include Make (Irmin_tezos.Schema)
   end
 
   let create_repo config =
@@ -187,7 +187,7 @@ struct
          or nothing. See #1293 *)
       Lwt.pause ()
     in
-    let on_end () = Store.Private_layer.wait_for_freeze repo in
+    let on_end () = Store.Backend_layer.wait_for_freeze repo in
     let pp ppf =
       if Irmin_layers.Stats.get_freeze_count () = 0 then
         Format.fprintf ppf "no freeze"
@@ -208,7 +208,7 @@ struct
 
   module Store = struct
     open Maker (Conf)
-    include Make (Tezos_context_hash_irmin.Encoding)
+    include Make (Irmin_tezos.Schema)
   end
 
   let create_repo config =
@@ -382,7 +382,7 @@ let main () ncommits ncommits_trace suite_filter inode_config store_type
     Lwt_main.run
       (Lwt.finalize run_benchmarks (fun () ->
            if keep_store then (
-             Logs.app (fun l -> l "Store kept at %s" config.store_dir);
+             [%logs.app "Store kept at %s" config.store_dir];
              let ( / ) = Filename.concat in
              let ro p = if Sys.file_exists p then Unix.chmod p 0o444 in
              ro (config.store_dir / "store.branches");
@@ -394,8 +394,7 @@ let main () ncommits ncommits_trace suite_filter inode_config store_type
            else FSHelper.rm_dir config.store_dir;
            Lwt.return_unit))
   in
-  Logs.app (fun l ->
-      l "%a@." Fmt.(list ~sep:(any "@\n@\n") (fun ppf f -> f ppf)) results)
+  [%logs.app "%a@." Fmt.(list ~sep:(any "@\n@\n") (fun ppf f -> f ppf)) results]
 
 open Cmdliner
 

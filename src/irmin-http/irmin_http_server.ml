@@ -45,7 +45,7 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
     include Webmachine.Make (HTTP.IO) (Clock)
   end
 
-  module P = S.Private
+  module P = S.Backend
 
   class virtual resource =
     object
@@ -77,7 +77,7 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
     end
 
   let parse_error rd str (`Msg e) =
-    let err = Fmt.strf "Parse error %S: %s" str e in
+    let err = Fmt.str "Parse error %S: %s" str e in
     Wm.respond ~body:(`String err) 400 rd
 
   module Content_addressable (S : sig
@@ -346,6 +346,7 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
       (struct
         include P.Contents
 
+        let unsafe_add t k v = unsafe_add t k v >|= fun _ -> ()
         let batch t f = P.Repo.batch t @@ fun x _ _ -> f x
       end)
       (P.Contents.Key)
@@ -356,6 +357,7 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
       (struct
         include P.Node
 
+        let unsafe_add t k v = unsafe_add t k v >|= fun _ -> ()
         let batch t f = P.Repo.batch t @@ fun _ x _ -> f x
       end)
       (P.Node.Key)
@@ -366,6 +368,7 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
       (struct
         include P.Commit
 
+        let unsafe_add t k v = unsafe_add t k v >|= fun _ -> ()
         let batch t f = P.Repo.batch t @@ fun _ _ x -> f x
       end)
       (P.Commit.Key)
@@ -386,7 +389,7 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
         ("/blobs", fun () -> new Blob.items db);
         ("/blob/:id", fun () -> new Blob.item blob);
         ("/trees", fun () -> new Tree.items db);
-        ("/trees/merge", fun () -> new Tree.merge S.Private.Node.merge db);
+        ("/trees/merge", fun () -> new Tree.merge S.Backend.Node.merge db);
         ("/tree/:id", fun () -> new Tree.item tree);
         ("/commits", fun () -> new Commit.items db);
         ("/commit/:id", fun () -> new Commit.item commit);
@@ -406,24 +409,24 @@ module Make (HTTP : Cohttp_lwt.S.Server) (S : Irmin.S) = struct
     let pp_con = Fmt.of_to_string Cohttp.Connection.to_string in
     let callback (_ch, conn) request body =
       let open Cohttp in
-      Log.debug (fun l -> l "new connection %a" pp_con conn);
+      [%log.debug "new connection %a" pp_con conn];
       let* status, headers, body, _path =
         Wm.dispatch' routes ~body ~request >|= function
         | None -> (`Not_found, Header.init (), `String "Not found", [])
         | Some result -> result
       in
-      Log.info (fun l ->
-          l "[%a] %d - %s %s" pp_con conn
-            (Code.code_of_status status)
-            (Code.string_of_method (Request.meth request))
-            (Uri.path (Request.uri request)));
+      [%log.info
+        "[%a] %d - %s %s" pp_con conn
+          (Code.code_of_status status)
+          (Code.string_of_method (Request.meth request))
+          (Uri.path (Request.uri request))];
 
       (* Finally, send the response to the client *)
       HTTP.respond ~headers ~body ~status ()
     in
     (* create the server and handle requests with the function defined above *)
     let conn_closed (_, conn) =
-      Log.debug (fun l -> l "connection %a closed" pp_con conn)
+      [%log.debug "connection %a closed" pp_con conn]
     in
     HTTP.make ~callback ~conn_closed ()
 end

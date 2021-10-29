@@ -98,7 +98,8 @@ let t =
     $ clear
     $ gc)
 
-module Make (Store : Irmin.KV with type Schema.Contents.t = string) = struct
+module Make (Store : Irmin.Generic_key.KV with type Schema.Contents.t = string) =
+struct
   let info () = Store.Info.v ~author:"author" ~message:"commit message" 0L
 
   let times ~n ~init f =
@@ -131,7 +132,7 @@ module Make (Store : Irmin.KV with type Schema.Contents.t = string) = struct
   (* init: create a tree with [t.depth] levels and each levels has
      [t.tree_add] files + one directory going to the next levele. *)
   let init t config =
-    let tree = Store.Tree.empty in
+    let tree = Store.Tree.empty () in
     let* v = Store.Repo.v config >>= Store.master in
     let* tree =
       times ~n:t.depth ~init:tree (fun depth tree ->

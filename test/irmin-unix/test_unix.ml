@@ -16,11 +16,9 @@
 
 open! Import
 
-let stats =
-  Some
-    (fun () ->
-      let stats = Irmin_watcher.stats () in
-      (stats.Irmin_watcher.watchdogs, Irmin.Private.Watch.workers ()))
+let stats () =
+  let stats = Irmin_watcher.stats () in
+  (stats.Irmin_watcher.watchdogs, Irmin.Backend.Watch.workers ())
 
 (* FS *)
 
@@ -40,12 +38,12 @@ module FS = struct
     Lwt.return_unit
 
   let clean () =
-    Irmin.Private.Watch.(set_listen_dir_hook none);
+    Irmin.Backend.Watch.(set_listen_dir_hook none);
     Lwt.return_unit
 
   let suite =
     Irmin_test.Suite.create ~name:"FS" ~init ~store ~config ~clean ~stats
-      ~layered_store:None
+      ~layered_store:None ()
 end
 
 (* GIT *)
@@ -74,7 +72,7 @@ module Git = struct
   let store = (module S : Test_git.G)
 
   let clean () =
-    Irmin.Private.Watch.(set_listen_dir_hook none);
+    Irmin.Backend.Watch.(set_listen_dir_hook none);
     Lwt.return_unit
 
   let config =
@@ -84,7 +82,7 @@ module Git = struct
   let suite =
     let store = (module S : Irmin_test.S) in
     Irmin_test.Suite.create ~name:"GIT" ~init ~store ~config ~clean ~stats
-      ~layered_store:None
+      ~layered_store:None ()
 
   let test_non_bare () =
     init () >>= fun () ->
@@ -111,14 +109,14 @@ module Conf = struct
       Irmin_unix.Resolver.load_config ~config_path:"test/irmin-unix/test.yml"
         ~store:"pack" ~contents:"string" ~hash ()
     in
-    let spec = Irmin.Private.Conf.spec cfg in
+    let spec = Irmin.Backend.Conf.spec cfg in
     let index_log_size =
-      Irmin.Private.Conf.get cfg Irmin_pack.Conf.Key.index_log_size
+      Irmin.Backend.Conf.get cfg Irmin_pack.Conf.Key.index_log_size
     in
-    let fresh = Irmin.Private.Conf.get cfg Irmin_pack.Conf.Key.fresh in
+    let fresh = Irmin.Backend.Conf.get cfg Irmin_pack.Conf.Key.fresh in
     Alcotest.(check string)
       "Spec name" "pack"
-      (Irmin.Private.Conf.Spec.name spec);
+      (Irmin.Backend.Conf.Spec.name spec);
     Alcotest.(check int) "index-log-size" 1234 index_log_size;
     Alcotest.(check bool) "fresh" true fresh;
     Lwt.return_unit

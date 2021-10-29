@@ -5,12 +5,15 @@
 - **irmin**
   - `Tree` operations now raise a `Dangling_hash` exception when called with a
     path that contains dangling hashes in the underlying store, rather than
-    interpreting such paths as ending with empty nodes (#1477, @CraigFe)
+    interpreting such paths as ending with empty nodes (#1477 #1559, @CraigFe)
   - Fix the pre-hashing function for big-endian architectures. (#1505,
     @Ngoguey42, @dinosaure)
   - Fix the implementation of comparison on `Irmin.Tree` objects to use the
     comparison defined on hashes. The previous implementation was unstable.
     (#1519, @CraigFe)
+  - Fix a bug in `Tree.export` where nodes could be exported before
+    some of their contents, resulting in indirect hashes in irmin-pack
+    (#1508, @Ngoguey42)
 
 ### Added
 
@@ -20,6 +23,20 @@
     provide `close` and `batch` functions (#1345, @samoht)
   - Atomic-write backend implementations have to provide a `close` function
     (#1345, @samoht)
+  - `Node.seq` and `Node.of_seq` are added to avoid allocating intermediate
+    lists when it is not necessary (#1508, @samoht)
+  - New optional `cache` parameter to `Tree.hash`, `Tree.Contents.hash`,
+    `Tree.list`, `Node.list`, `Node.seq` and `Node.find` to control the storing
+    of lazily loaded data (#1526, @Ngoguey42)
+  - Add `Node.clear` to clear internal caches (#1526, @Ngoguey42)
+  - Added a `tree` argument to `Tree.fold` to manipulate the subtrees (#1527,
+    @icristescu, @Ngoguey42)
+  - Add a function `Store.Tree.singleton` for building trees with a single
+    contents binding. (#1567, @CraigFe)
+  - Add a function `Store.Tree.pruned` for building purely in-memory tree
+    objects with known hashes. (#1537, @CraigFe)
+  - Added a `order` argument to specify the order of traversal in `Tree.fold`
+    (#1548, @icristescu, @CraigFe)
 
 - **irmin-bench**
   - Many improvements to the actions trace replay:
@@ -41,17 +58,24 @@
 - **irmin-pack**
   - Added a `stat-store` command to `irmin-fsck` to output stats on the tree
     under a specified commit (#1391, @icristescu, @Ngoguey42, @CraigFe).
+  - Added new counters in `Stats` (#1570, @Ngoguey42).
 
 - **irmin-unix**
   - Update `irmin` CLI to raise an exception when an invalid/non-existent
     config file is specified (#1413, @zshipko)
+
+- **irmin-tezos**
+  - Added a new package to mirror Tezos `tezos-context.encoding` library.
+    That'll simplify building benchmarks and custom tools (#1579, @samoht)
 
 ### Changed
 
 - **irmin**
   - `Irmin.Sync` is now a namespace: use `Irmin.Sync.Make(S)` instead of
     `Irmin.Sync(S)` (#1338, @samoht)
-  - `Store.Private.Sync` is now `Store.Private.Remote` (#1338, @samoht)
+  - `Irmin.Private` is now `Irmin.Backend` (#1530, @CraigFe)
+  - `Store.Private` is now `Store.Backend` (#1530, @CraigFe)
+  - `Store.Private.Sync` is now `Store.Backend.Remote` (#1338, @samoht)
   - `Irmin.Private.{Commit,Node}` are now `Irmin.{Node,Commit}`. (#1471,
     @CraigFe)
   - All module types are now using snake-case and are not capitalized anymore.
@@ -85,10 +109,27 @@
     define in an Irmin store. Use this as a parameter to every `Maker`
     functor. This is a large change which touches all the backends.
     (#1470, @samoht, @CraigFe)
-  - Add `Irmin.Private.Conf.Schema` for grouping configuration keys. Now
-    `Irmin.Private.Conf.key` takes an additional `~spec` parameter.
+  - Add `Irmin.Backend.Conf.Schema` for grouping configuration keys. Now
+    `Irmin.Backend.Conf.key` takes an additional `~spec` parameter.
     (#1492, @zshipko)
   - Do not allocate large lists in `Irmin.Tree.clear` (#1515, @samoht)
+  - `Node.v` is renamed to `Node.of_list` (#1508, @samoht)
+  - Rewrite `Tree.export` in order to minimise the memory footprint.
+    (#1508, @Ngoguey42)
+  - Remove the ``~force:`And_clear`` case parameter from `Tree.fold`,
+    ``~force:`True ~cache:false`` is the new equivalent. (#1526, @Ngoguey42)
+  - `` `Tree.fold ~force:`True`` and `` `Tree.fold ~force:`False`` don't
+    cache the lazily loaded data any more. Pass `~cache:true` to enable it
+    again. (#1526, @Ngoguey42)
+  - `Tree.empty` now takes a unit argument. (#1566, @CraigFe)
+
+  - Add support for non-content-addressed ("generic key") backend stores. This
+    allows Irmin to work with backends in which not all values are addressed by
+    their hash. In particular, this includes:
+    - New functions: `Store.{Commit,Contents,Tree}.of_key`.
+    - Adds `Irmin.{Node,Commit}.Generic_key` modules.
+    - Adds a new type that must be provided by backends: `Node.Portable`.
+    - Adds a new type of backend store: `Irmin.Indexable.S`.
 
 - **irmin-containers**
   - Removed `Irmin_containers.Store_maker`; this is now equivalent to
@@ -117,8 +158,10 @@
     (#1369, @samoht)
 
 - **irmin-unix**
-  - Allow config file to be specified when using
-    `Irmin_unix.Resolver.load_config` (#1464, @zshipko)
+  - Clean up command line interface. Allow config file to be specified when
+    using `Irmin_unix.Resolver.load_config` and make command line options
+    take precedence over config options.
+    (#1464, #1543, @zshipko)
 
 ## 2.7.2 (2021-07-20)
 

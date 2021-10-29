@@ -73,6 +73,9 @@ module Read_only = Read_only
 module Append_only = Append_only
 (** Append-only backend backends. *)
 
+module Indexable = Indexable
+(** Indexable backend backends. *)
+
 module Content_addressable = Content_addressable
 (** Content-addressable backends. *)
 
@@ -132,10 +135,10 @@ type config = Conf.t
     Every backend has different configuration options, which are kept abstract
     to the user. *)
 
-(** [Private] defines functions only useful for creating new backends. If you
+(** [Backend] defines functions only useful for creating new backends. If you
     are just using the library (and not developing a new backend), you should
     not use this module. *)
-module Private : sig
+module Backend : sig
   module Conf : module type of Conf
   (** Backend configuration.
 
@@ -148,9 +151,11 @@ module Private : sig
   module Slice = Slice
   module Remote = Remote
 
-  module type S = Private.S
-  (** The complete collection of private implementations. *)
+  module type S = Backend.S
+  (** The complete collection of backend implementations. *)
 end
+
+module Key = Key
 
 (** {1 High-level Stores}
 
@@ -207,9 +212,29 @@ module type KV_maker = sig
   (** @inline *)
 end
 
+(** "Generic key" stores are Irmin stores in which the backend may not be keyed
+    directly by the hashes of stored values. See {!Key} for more details. *)
+module Generic_key : sig
+  include module type of Store.Generic_key
+  (** @inline *)
+
+  module type Maker_args = sig
+    module Contents_store : Indexable.Maker_concrete_key2
+    module Node_store : Indexable.Maker_concrete_key1
+    module Commit_store : Indexable.Maker_concrete_key1
+    module Branch_store : Atomic_write.Maker
+  end
+
+  module Maker (X : Maker_args) :
+    Maker
+      with type ('h, 'v) contents_key = ('h, 'v) X.Contents_store.key
+       and type 'h node_key = 'h X.Node_store.key
+       and type 'h commit_key = 'h X.Commit_store.key
+end
+
 (** {2 Synchronization} *)
 
-val remote_store : (module S with type t = 'a) -> 'a -> remote
+val remote_store : (module Generic_key.S with type t = 'a) -> 'a -> remote
 (** [remote_store t] is the remote corresponding to the local store [t].
     Synchronization is done by importing and exporting store {{!BC.slice}
     slices}, so this is usually much slower than native synchronization using
@@ -265,7 +290,7 @@ module Sync = Sync
       open Astring
 
       let time = ref 0L
-      let failure fmt = Fmt.kstrf failwith fmt
+      let failure fmt = Fmt.kstr failwith fmt
 
       (* A log entry *)
       module Entry : sig
@@ -426,7 +451,7 @@ module Sync = Sync
 (** {1 Helpers} *)
 
 (** [Dot] provides functions to export a store to the Graphviz `dot` format. *)
-module Dot (S : S) : Dot.S with type db = S.t
+module Dot (S : Generic_key.S) : Dot.S with type db = S.t
 
 (** {1:backend Backends}
 
@@ -454,12 +479,15 @@ module KV_maker (CA : Content_addressable.Maker) (AW : Atomic_write.Maker) :
   KV_maker with type endpoint = unit and type metadata = unit
 
 (** Advanced store creator. *)
-module Of_private (P : Private.S) :
-  S
+module Of_backend (P : Backend.S) :
+  Generic_key.S
     with module Schema = P.Schema
      and type repo = P.Repo.t
      and type slice = P.Slice.t
-     and module Private = P
+     and type contents_key = P.Contents.Key.t
+     and type node_key = P.Node.Key.t
+     and type commit_key = P.Commit.Key.t
+     and module Backend = P
 
 module Export_for_backends = Export_for_backends
 (** Helper module containing useful top-level types for defining Irmin backends.

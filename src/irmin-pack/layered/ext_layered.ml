@@ -31,7 +31,7 @@ module IO_layers = IO_layers.IO
 let may f = function None -> Lwt.return_unit | Some bf -> f bf
 let lock_path root = Filename.concat root "lock"
 
-module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
+module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.Extended) = struct
   open struct
     module C = Schema.Contents
     module M = Schema.Metadata
@@ -42,11 +42,12 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
   module H = Schema.Hash
   module Index = Irmin_pack.Index.Make (H)
   module Pack = Irmin_pack.Pack_store.Maker (V) (Index) (H)
+  module XKey = Irmin.Key.Of_hash (H)
 
-  type store_handle =
-    | Commit_t : H.t -> store_handle
-    | Node_t : H.t -> store_handle
-    | Content_t : H.t -> store_handle
+  type kinded_key =
+    | Commit_t of XKey.t
+    | Node_t of XKey.t
+    | Content_t of XKey.t
 
   module X = struct
     module Schema = Schema
@@ -65,18 +66,31 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
     end
 
     module Node = struct
+      module Value = struct
+        module Hash = H
+        include Schema.Node (Contents.Key) (XKey)
+      end
+
       module Pa = Layered_store.Pack_maker (H) (Index) (Pack)
-      module CA = Inode_layers.Make (Config) (H) (Pa) (Schema.Node)
-      include Irmin.Node.Store (Contents) (CA) (H) (CA.Val) (M) (P)
+      module CA = Inode_layers.Make (Config) (H) (Pa) (Value)
+      include Irmin.Node.Generic_key.Store (Contents) (CA) (H) (CA.Val) (M) (P)
     end
 
+    module Node_portable = Node.CA.Val.Portable
+
     module Commit = struct
+      module Value = struct
+        include Schema.Commit (Node.Key) (XKey)
+
+        type hash = Hash.t [@@deriving irmin]
+      end
+
       module Pack_value =
         Irmin_pack.Pack_value.Of_commit
           (H)
           (struct
             module Info = Schema.Info
-            include Schema.Commit
+            include Value
           end)
 
       module CA = struct
@@ -84,12 +98,16 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
         include Layered_store.Content_addressable (H) (Index) (CA) (CA)
       end
 
-      include Irmin.Commit.Store (Schema.Info) (Node) (CA) (H) (Schema.Commit)
+      include Irmin.Commit.Store (Schema.Info) (Node) (CA) (H) (Value)
     end
 
     module Branch = struct
       module Key = B
-      module Val = H
+
+      module Val = struct
+        include H
+        include Commit.Key
+      end
 
       module Atomic_write = struct
         module AW =
@@ -105,8 +123,8 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
       include Layered_store.Atomic_write (Key) (Atomic_write) (Atomic_write)
     end
 
-    module Slice = Irmin.Private.Slice.Make (Contents) (Node) (Commit)
-    module Remote = Irmin.Private.Remote.None (H) (B)
+    module Slice = Irmin.Backend.Slice.Make (Contents) (Node) (Commit)
+    module Remote = Irmin.Backend.Remote.None (H) (B)
 
     module Repo = struct
       type upper_layer = {
@@ -250,9 +268,9 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
           (function
             | Irmin_pack.Version.Invalid { expected; found } as e
               when expected = V.version ->
-                Log.err (fun m ->
-                    m "[%s] Attempted to open store of unsupported version %a"
-                      root Irmin_pack.Version.pp found);
+                [%log.err
+                  "[%s] Attempted to open store of unsupported version %a" root
+                    Irmin_pack.Version.pp found];
                 Lwt.fail e
             | e -> Lwt.fail e)
 
@@ -383,7 +401,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
         |> List.map (fun name ->
                let root = Filename.concat root (name config) in
                let config =
-                 Irmin.Private.Conf.add config Conf.Pack.Key.root root
+                 Irmin.Backend.Conf.add config Conf.Pack.Key.root root
                in
                try
                  let io =
@@ -422,7 +440,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
           call clear on one store. However, each store has its own caches, which
           need to be cleared too. *)
       let clear_previous_upper ?keep_generation t =
-        Log.debug (fun l -> l "clear previous upper");
+        [%log.debug "clear previous upper"];
         Contents.CA.clear_previous_upper ?keep_generation t.contents
         >>= fun () ->
         Node.CA.clear_caches_next_upper t.node;
@@ -472,7 +490,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
            | Some index -> (integrity_check_layer ~layer index, layer)
            | None -> (Ok `No_error, layer))
 
-  include Irmin.Of_private (X)
+  include Irmin.Of_backend (X)
 
   let sync = X.Repo.sync
   let clear = X.Repo.clear
@@ -555,9 +573,9 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
         f (contents, nodes, commits)
 
       let copy ?cancel ?(min = []) t commits =
-        Log.debug (fun f ->
-            f "@[<2>copy to lower:@ min=%a,@ max=%a@]" pp_commits min pp_commits
-              commits);
+        [%log.debug
+          "@[<2>copy to lower:@ min=%a,@ max=%a@]" pp_commits min pp_commits
+            commits];
         let max = List.map (fun x -> `Commit (Commit.hash x)) commits in
         let min = List.map (fun x -> `Commit (Commit.hash x)) min in
         on_lower t (fun l ->
@@ -578,9 +596,9 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
         f (contents, nodes, commits)
 
       let copy ?cancel ?(min = []) t commits =
-        Log.debug (fun f ->
-            f "@[<2>copy to next upper:@ min=%a,@ max=%a@]" pp_commits min
-              pp_commits commits);
+        [%log.debug
+          "@[<2>copy to next upper:@ min=%a,@ max=%a@]" pp_commits min
+            pp_commits commits];
         let max = List.map (fun x -> `Commit (Commit.hash x)) commits in
         let min = List.map (fun x -> `Commit (Commit.hash x)) min in
         on_next_upper t (fun u ->
@@ -597,7 +615,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
       let copy_newies ~cancel t =
         let newies = X.Commit.CA.consume_newies t.X.Repo.commit in
         let newies = List.rev_map (fun x -> `Commit x) newies in
-        Log.debug (fun l -> l "copy newies");
+        [%log.debug "copy newies"];
         (* we want to copy all the new commits; stop whenever one
            commmit already in the other upper or in lower. *)
         let skip_commits k =
@@ -674,14 +692,13 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
 
            (ngoguey): we could stop at the uppers directly following a lower.
         *)
-        Log.debug (fun l ->
-            l
-              "self_contained: copy commits min:%a; max:%a from lower into \
-               upper to make the upper self contained"
-              (Fmt.list (Irmin.Type.pp H.t))
-              min
-              (Fmt.list (Irmin.Type.pp H.t))
-              max);
+        [%log.debug
+          "self_contained: copy commits min:%a; max:%a from lower into upper \
+           to make the upper self contained"
+            (Fmt.list (Irmin.Type.pp H.t))
+            min
+            (Fmt.list (Irmin.Type.pp H.t))
+            max];
         on_current_upper t (fun u -> iter_copy u ~min t max)
     end
   end
@@ -710,7 +727,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
     let pp ppf = function E -> () | F (pp, k, v) -> Fmt.pf ppf "%s=%a" k pp v
 
     let pps ppf t =
-      Fmt.list ~sep:(Fmt.unit "; ") pp ppf (List.filter (fun x -> x <> E) t)
+      Fmt.list ~sep:(Fmt.any "; ") pp ppf (List.filter (fun x -> x <> E) t)
 
     let commits k = function [] -> E | v -> F (pp_commits, k, v)
   end
@@ -719,14 +736,14 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
     Fmt.pf ppf "%a" Layered_store.pp_current_upper t.X.Repo.flip
 
   let unsafe_freeze ~min_lower ~max_lower ~min_upper ~max_upper ?hook t =
-    Log.info (fun l ->
-        l "[%a] freeze starts { %a }" pp_repo t Field.pps
-          [
-            Field.commits "min_lower" min_lower;
-            Field.commits "max_lower" max_lower;
-            Field.commits "min_upper" min_upper;
-            Field.commits "max_upper" max_upper;
-          ]);
+    [%log.info
+      "[%a] freeze starts { %a }" pp_repo t Field.pps
+        [
+          Field.commits "min_lower" min_lower;
+          Field.commits "max_lower" max_lower;
+          Field.commits "min_upper" min_upper;
+          Field.commits "max_upper" max_upper;
+        ]];
     let offset = X.Repo.offset t in
     let lock_file = lock_path t.root in
     (* We take a file lock here to signal that a freeze was in progess in
@@ -825,7 +842,7 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
   let needs_recovery t = Lock.test (lock_path t.X.Repo.root)
 
   let check_self_contained ?heads t =
-    Log.debug (fun l -> l "Check that the upper layer is self contained");
+    [%log.debug "Check that the upper layer is self contained"];
     let errors = ref 0 in
     let none () =
       incr errors;
@@ -843,17 +860,17 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
     in
     let pp_commits = Fmt.list ~sep:Fmt.comma Commit.pp_hash in
     if !errors = 0 then
-      Fmt.kstrf
+      Fmt.kstr
         (fun x -> Ok (`Msg x))
         "Upper layer is self contained for heads %a" pp_commits heads
     else
-      Fmt.kstrf
+      Fmt.kstr
         (fun x -> Error (`Msg x))
         "Upper layer is not self contained for heads %a: %n phantom objects \
          detected"
         pp_commits heads !errors
 
-  module Private_layer = struct
+  module Backend_layer = struct
     module Hook = struct
       type 'a t = 'a -> unit Lwt.t
 
@@ -871,5 +888,6 @@ end
 module Maker (C : Conf.Pack.S) = struct
   type endpoint = unit
 
-  module Make (S : Irmin.Schema.S) = Maker' (C) (S)
+  include Irmin.Key.Store_spec.Hash_keyed
+  module Make (S : Irmin.Schema.Extended) = Maker' (C) (S)
 end
