@@ -124,7 +124,7 @@ module Make (P : Private.S) = struct
 
   type metadata = Metadata.t [@@deriving irmin ~equal]
   type key = Path.t [@@deriving irmin ~pp]
-  type hash = P.Hash.t [@@deriving irmin ~pp ~equal]
+  type hash = P.Hash.t [@@deriving irmin ~pp ~equal ~compare]
   type step = Path.step [@@deriving irmin ~pp ~compare]
   type contents = P.Contents.Val.t [@@deriving irmin ~equal]
   type repo = P.Repo.t
@@ -255,8 +255,12 @@ module Make (P : Private.S) = struct
           | Some x, Some y -> equal_contents x y
           | _ -> equal_hash (hash x) (hash y))
 
-    (* FIXME: fix compare *)
-    let t = Type.map ~equal:(Type.stage equal) v of_v (fun t -> t.v)
+    let compare (x : t) (y : t) =
+      if x == y then 0 else compare_hash (hash x) (hash y)
+
+    let t =
+      Type.map ~equal:(Type.stage equal) ~compare:(Type.stage compare) v of_v
+        (fun t -> t.v)
 
     let merge : t Merge.t =
       let f ~old x y =
@@ -376,38 +380,34 @@ module Make (P : Private.S) = struct
       let info = { hash; map; value; findv_cache } in
       { v; info }
 
-    let rec clear_elt ~max_depth depth (_, v) =
+    let rec clear_elt ~max_depth depth v =
       match v with
       | `Contents (c, _) -> if depth + 1 > max_depth then Contents.clear c
       | `Node t -> clear ~max_depth (depth + 1) t
 
-    and clear_map ~max_depth depth = List.iter (clear_elt ~max_depth depth)
-    and clear_maps ~max_depth depth = List.iter (clear_map ~max_depth depth)
-
     and clear_info ~max_depth ?v depth i =
-      let added =
+      let clear _ v = clear_elt ~max_depth depth v in
+      let () =
         match v with
         | Some (Value (_, _, Some um)) ->
-            StepMap.bindings um
-            |> List.filter_map (function
-                 | _, Remove -> None
-                 | k, Add v -> Some (k, v))
-        | _ -> []
+            StepMap.iter
+              (fun k -> function Remove -> () | Add v -> clear k v)
+              um
+        | _ -> ()
       in
-      let map =
+      let () =
         match (v, i.map) with
-        | Some (Map m), _ | _, Some m -> StepMap.bindings m
-        | _ -> []
+        | Some (Map m), _ | _, Some m -> StepMap.iter clear m
+        | _ -> ()
       in
-      let findv =
-        match i.findv_cache with Some m -> StepMap.bindings m | None -> []
+      let () =
+        match i.findv_cache with Some m -> StepMap.iter clear m | None -> ()
       in
       if depth >= max_depth && not (info_is_empty i) then (
         i.value <- None;
         i.map <- None;
         i.hash <- None;
-        i.findv_cache <- None);
-      clear_maps ~max_depth depth [ map; added; findv ]
+        i.findv_cache <- None)
 
     and clear ~max_depth depth t = clear_info ~v:t.v ~max_depth depth t.info
 
@@ -841,8 +841,8 @@ module Make (P : Private.S) = struct
         match s with
         | [] -> k acc
         | h :: t ->
-            (step [@tailcall]) ~path acc d h @@ fun acc ->
-            (steps [@tailcall]) ~path acc d t k
+            (step [@tailcall]) ~path acc d h (fun acc ->
+                (steps [@tailcall]) ~path acc d t k)
       and map : type r. (map option, acc, r) folder =
        fun ~path acc d m k ->
         match m with
@@ -851,8 +851,8 @@ module Make (P : Private.S) = struct
             let bindings = StepMap.bindings m in
             let s = List.rev_map fst bindings in
             let* acc = pre path s acc in
-            (steps [@tailcall]) ~path acc d bindings @@ fun acc ->
-            post path s acc >>= k
+            (steps [@tailcall]) ~path acc d bindings (fun acc ->
+                post path s acc >>= k)
       in
       aux_uniq ~path acc 0 t Lwt.return
 
@@ -884,8 +884,12 @@ module Make (P : Private.S) = struct
     let remove t step = update t step Remove
     let add t step v = update t step (Add v)
 
-    (* FIXME: fix compare *)
-    let t node = Type.map ~equal:(Type.stage equal) node of_v (fun t -> t.v)
+    let compare (x : t) (y : t) =
+      if x == y then 0 else compare_hash (hash x) (hash y)
+
+    let t node =
+      Type.map ~equal:(Type.stage equal) ~compare:(Type.stage compare) node of_v
+        (fun t -> t.v)
 
     let _, t =
       Type.mu2 (fun _ y ->
@@ -1176,7 +1180,7 @@ module Make (P : Private.S) = struct
                   | true -> k Unchanged
                   | false -> with_new_child t)
               | Some (`Node _), Some (`Contents _ as t) -> with_new_child t)
-          | Some (step, key_suffix) -> (
+          | Some (step, key_suffix) ->
               let* old_binding =
                 Node.findv "update_tree.findv" parent_node step
               in
@@ -1185,19 +1189,19 @@ module Make (P : Private.S) = struct
                 | Some (`Node child) -> child
                 | None | Some (`Contents _) -> Node.empty
               in
-              (aux [@tailcall]) key_suffix to_recurse @@ function
-              | Unchanged ->
-                  (* This includes [remove]s in an empty node, in which case we
-                     want to avoid adding a binding anyway. *)
-                  k Unchanged
-              | Changed child -> (
-                  match Node.is_empty child with
-                  | true ->
-                      (* A [remove] has emptied previously non-empty child with
-                         binding [h], so we remove the binding. *)
-                      Node.remove parent_node step >>= changed
-                  | false -> Node.add parent_node step (`Node child) >>= changed
-                  ))
+              (aux [@tailcall]) key_suffix to_recurse (function
+                | Unchanged ->
+                    (* This includes [remove]s in an empty node, in which case we
+                       want to avoid adding a binding anyway. *)
+                    k Unchanged
+                | Changed child -> (
+                    match Node.is_empty child with
+                    | true ->
+                        (* A [remove] has emptied previously non-empty child with
+                           binding [h], so we remove the binding. *)
+                        Node.remove parent_node step >>= changed
+                    | false ->
+                        Node.add parent_node step (`Node child) >>= changed))
         in
         let top_node =
           match root_tree with `Node n -> n | `Contents _ -> Node.empty
@@ -1362,11 +1366,11 @@ module Make (P : Private.S) = struct
       let task = try Some (Stack.pop todo) with Stack.Empty -> None in
       match task with None -> Lwt.return_unit | Some t -> t () >>= loop
     in
-    (add_to_todo [@tailcall]) n @@ fun () ->
-    loop () >|= fun () ->
-    let x = Node.hash n in
-    Log.debug (fun l -> l "Tree.export -> %a" pp_hash x);
-    x
+    (add_to_todo [@tailcall]) n (fun () ->
+        loop () >|= fun () ->
+        let x = Node.hash n in
+        Log.debug (fun l -> l "Tree.export -> %a" pp_hash x);
+        x)
 
   let merge : t Merge.t =
     let f ~old (x : t) y =

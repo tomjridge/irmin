@@ -92,7 +92,10 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
       module Val = H
 
       module Atomic_write = struct
-        module AW = Irmin_pack.Atomic_write.Make_persistent (V) (Key) (Val)
+        module AW =
+          Irmin_pack.Atomic_write.Make_persistent (V) (Key)
+            (Irmin_pack.Atomic_write.Value.Of_hash (Val))
+
         include Irmin_pack.Atomic_write.Closeable (AW)
 
         let v ?fresh ?readonly path =
@@ -502,7 +505,8 @@ module Maker' (Config : Conf.Pack.S) (Schema : Irmin.Schema.S) = struct
       | None -> []
       | Some v ->
           List.rev_map
-            (function `Inode x -> `Node x | (`Node _ | `Contents _) as x -> x)
+            (function
+              | _, `Inode x -> `Node x | _, ((`Node _ | `Contents _) as x) -> x)
             (X.Node.CA.Val.pred v)
 
     let always_false _ = false

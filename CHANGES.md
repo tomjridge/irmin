@@ -6,9 +6,11 @@
   - `Tree` operations now raise a `Dangling_hash` exception when called with a
     path that contains dangling hashes in the underlying store, rather than
     interpreting such paths as ending with empty nodes (#1477, @CraigFe)
-
-- **irmin-pack**
-  - Fix termination condition of reconstruct index (#1468, @Ngoguey42)
+  - Fix the pre-hashing function for big-endian architectures. (#1505,
+    @Ngoguey42, @dinosaure)
+  - Fix the implementation of comparison on `Irmin.Tree` objects to use the
+    comparison defined on hashes. The previous implementation was unstable.
+    (#1519, @CraigFe)
 
 ### Added
 
@@ -20,19 +22,25 @@
     (#1345, @samoht)
 
 - **irmin-bench**
-  - Benchmarks for tree operations now support layered stores
-    (#1293, @Ngoguey42)
-  - New features in benchmarks for tree operations (TODO: A pretty description
-    just before release) (#1314, #1326, #1357, #1358, #1367, #1384, #1403,
-    #1404, #1416, #1429, #1430, #1438, #1441 @Ngoguey42)
-  - Check hash of commit in benchmarks for trees (#1328, @icristescu)
+  - Many improvements to the actions trace replay:
+      - Support for the layered store (#1293, @Ngoguey42)
+      - Fix replay for the first ~650k commits (was ~13k) (#1314, @Ngoguey42)
+      - Can change inode configuration prior to replay (#1326, @Ngoguey42)
+      - Check hash of commits (#1328, @icristescu)
+      - Fix the path flattening technique (#1357, @Ngoguey42)
+      - Introduce a new actions trace that can support replaying up to ~1300k
+        commits. (#1358, @Ngoguey42)
+      - Improve the stats collection and stats report (#1367, #1384, #1403,
+        #1404, #1416, #1429, #1438, #1501, @Ngoguey42)
+      - Enable replay in CI (#1430, @Ngoguey42)
+      - Enable replay in CB (#1441, @Ngoguey42)
 
 - **irmin-mem**
   - Added `Irmin_mem.Content_addressable` (#1369, @samoht)
 
 - **irmin-pack**
-   - Added `integrity-check-index` command in `irmin-fsck`. (#1480, #1487
-     @icristescu, @samoht)
+  - Added a `stat-store` command to `irmin-fsck` to output stats on the tree
+    under a specified commit (#1391, @icristescu, @Ngoguey42, @CraigFe).
 
 - **irmin-unix**
   - Update `irmin` CLI to raise an exception when an invalid/non-existent
@@ -80,10 +88,7 @@
   - Add `Irmin.Private.Conf.Schema` for grouping configuration keys. Now
     `Irmin.Private.Conf.key` takes an additional `~spec` parameter.
     (#1492, @zshipko)
-
-- **irmin-pack**
-   - `reconstruct_index` is now `traverse_pack_file`, it allows for both index
-     reconstruction and index checking  (#1478, @Ngoguey42)
+  - Do not allocate large lists in `Irmin.Tree.clear` (#1515, @samoht)
 
 - **irmin-containers**
   - Removed `Irmin_containers.Store_maker`; this is now equivalent to
@@ -105,6 +110,7 @@
     - `Irmin_git.dot_git` is now `Irmin_git.Conf.dot_git`
    (#1347, @samoht)
   - Renamed `Irmin_git.Make` into `Irmin_git.Maker` (#1369, @samoht)
+  - Upgrade `irmin-git` to `git.3.5.0`. (#1495, @dinosaure)
 
 - **irmin-mirage**
   - Renamed `Irmin_mirage_git.Make` into `Irmin_mirage_git.Maker`
@@ -113,6 +119,27 @@
 - **irmin-unix**
   - Allow config file to be specified when using
     `Irmin_unix.Resolver.load_config` (#1464, @zshipko)
+
+## 2.7.2 (2021-07-20)
+
+### Added
+
+- **irmin-pack**
+   - Added `integrity-check-index` command in `irmin-fsck`. (#1480, #1487
+     @icristescu, @samoht)
+
+### Changed
+
+- **irmin-pack**
+   - `reconstruct_index` is now `traverse_pack_file`, it allows for both index
+     reconstruction and index checking  (#1478, @Ngoguey42)
+
+## 2.7.1 (2021-07-02)
+
+### Fixed
+
+- **irmin-pack**
+  - Fix termination condition of reconstruct index (#1468, @Ngoguey42)
 
 ## 2.7.0 (2021-06-22)
 
