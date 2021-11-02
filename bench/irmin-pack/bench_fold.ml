@@ -11,8 +11,14 @@ module Benchmark = struct
     let ( / ) = Int64.div in
     Int64.to_int (usage.maxrss / 1024L)
 
+  let with_timer f =
+    let timer = Mtime_clock.counter () in
+    let+ () = f () in
+    let span = Mtime_clock.count timer in
+    Mtime.Span.to_ms span
+
   let run config f =
-    let+ time, _ = with_timer f in
+    let+ time = with_timer f in
     let size = FSHelper.get_size config.root in
     let maxrss = get_maxrss () in
     { time; size; maxrss }
@@ -34,7 +40,7 @@ end
 
 module Flatten = Flatten.Flatten_storage_for_H (Store)
 
-let fold config =
+let fold config : unit Lwt.t =
   let conf = Irmin_pack.config ~readonly:true ~fresh:false config.root in
   let* repo = Store.Repo.v conf in
   let* commit =
