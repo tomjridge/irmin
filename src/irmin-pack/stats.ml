@@ -28,6 +28,7 @@ type t = {
   mutable inode_to_binv : int;
   mutable inode_decode_bin : int;
   mutable inode_encode_bin : int;
+  mutable inode_hash_of_offset : int;
 }
 [@@deriving irmin]
 
@@ -46,6 +47,7 @@ let fresh_stats () =
     inode_to_binv = 0;
     inode_decode_bin = 0;
     inode_encode_bin = 0;
+    inode_hash_of_offset = 0;
   }
 
 let s = fresh_stats ()
@@ -64,6 +66,7 @@ let reset_stats () =
   s.inode_to_binv <- 0;
   s.inode_decode_bin <- 0;
   s.inode_encode_bin <- 0;
+  s.inode_hash_of_offset <- 0;
   ()
 
 let get () = s
@@ -80,6 +83,9 @@ let incr_inode_rec_remove () = s.inode_rec_remove <- s.inode_rec_remove + 1
 let incr_inode_to_binv () = s.inode_to_binv <- s.inode_to_binv + 1
 let incr_inode_decode_bin () = s.inode_decode_bin <- s.inode_decode_bin + 1
 let incr_inode_encode_bin () = s.inode_encode_bin <- s.inode_encode_bin + 1
+
+let incr_inode_hash_of_offset () =
+  s.inode_hash_of_offset <- succ s.inode_hash_of_offset
 
 type cache_stats = { cache_misses : float }
 type offset_stats = { offset_ratio : float; offset_significance : int }

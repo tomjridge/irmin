@@ -28,6 +28,7 @@ type t = {
   mutable inode_to_binv : int;
   mutable inode_decode_bin : int;
   mutable inode_encode_bin : int;
+  mutable inode_hash_of_offset : int;
 }
 [@@deriving irmin]
 (** The type for stats for a store S.
@@ -62,6 +63,7 @@ val incr_inode_rec_remove : unit -> unit
 val incr_inode_to_binv : unit -> unit
 val incr_inode_decode_bin : unit -> unit
 val incr_inode_encode_bin : unit -> unit
+val incr_inode_hash_of_offset : unit -> unit
 
 type cache_stats = { cache_misses : float }
 type offset_stats = { offset_ratio : float; offset_significance : int }

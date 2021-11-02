@@ -40,7 +40,27 @@ end
 
 module Flatten = Flatten.Flatten_storage_for_H (Store)
 
-let fold config : unit Lwt.t =
+let reset_stats () =
+  Irmin_pack.Stats.reset_stats ();
+  Store.Tree.reset_counters ()
+
+let stats () =
+  let ips = Irmin_pack.Stats.get () in
+  Fmt.epr
+    "irmin-pack stats finds= %d cache_misses= %d appended_hashes= %d \
+     appended_offsets= %d inode_add = %d inode_remove = %d inode_of_seq = %d \
+     inode_of_raw = %d inode_rec_add = %d inode_rec_remove = %d inode_to_binv \
+     = %d inode_decode_bin = %d inode_encode_bin = %d inode_hash_of_offset = %d\n"
+    ips.finds ips.cache_misses ips.appended_hashes ips.appended_offsets
+    ips.inode_add ips.inode_remove ips.inode_of_seq ips.inode_of_raw
+    ips.inode_rec_add ips.inode_rec_remove ips.inode_to_binv
+    ips.inode_decode_bin ips.inode_encode_bin ips.inode_hash_of_offset;
+  Fmt.epr "tree counters = %a\n%!" Store.Tree.dump_counters ();
+  Index.Stats.reset_stats ();
+  Irmin_pack.Stats.reset_stats ();
+  Store.Tree.reset_counters ()
+
+let fold config =
   let conf = Irmin_pack.config ~readonly:true ~fresh:false config.root in
   let* repo = Store.Repo.v conf in
   let* commit =
@@ -56,7 +76,9 @@ let fold config : unit Lwt.t =
   in
 
   let tree = Store.Commit.tree commit in
+  reset_stats ();
   let* () = Flatten.flatten_storage { repo; tree } in
+  stats ();
   let+ () = Store.Repo.close repo in
   ()
 

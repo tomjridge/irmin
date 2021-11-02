@@ -1074,7 +1074,9 @@ struct
                 | Ok v -> v))
       in
       let hash : Compress.address -> H.t = function
-        | Indirect off -> hash off
+        | Indirect off ->
+            Stats.incr_inode_hash_of_offset ();
+            hash off
         | Direct n -> n
       in
       let ptr : Compress.ptr -> Bin.ptr =
