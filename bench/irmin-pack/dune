@@ -35,6 +35,14 @@
    irmin-tezos irmin_traces))
 
 (executable
+ (name bench_fold)
+ (modules bench_fold flatten)
+ (preprocess
+  (pps ppx_irmin.internal ppx_repr))
+ (libraries irmin-pack lwt unix cmdliner logs repr ppx_repr bench_common
+   tezos-context-hash-irmin rusage))
+
+(executable
  (name trace_stats)
  (modules trace_stats)
  (libraries cmdliner irmin_traces))
