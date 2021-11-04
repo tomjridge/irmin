@@ -35,7 +35,7 @@ end
 
 module Store = struct
   open Irmin_pack.Maker_ext (Irmin_pack.Version.V1) (Conf)
-  include Make (Tezos_context_hash_irmin.Encoding)
+  include Make (Irmin_tezos.Schema) (* guess *)
 end
 
 module Flatten = Flatten.Flatten_storage_for_H (Store)

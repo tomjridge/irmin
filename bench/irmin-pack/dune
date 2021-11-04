@@ -40,7 +40,7 @@
  (preprocess
   (pps ppx_irmin.internal ppx_repr))
  (libraries irmin-pack lwt unix cmdliner logs repr ppx_repr bench_common
-   tezos-context-hash-irmin rusage))
+   irmin-tezos rusage))
 
 (executable
  (name trace_stats)
