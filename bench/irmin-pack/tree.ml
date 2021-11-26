@@ -207,8 +207,17 @@ module Make_basic (Maker : Irmin_pack.Maker) (Conf : Irmin_pack.Conf.S) = struct
     include Make (Irmin_tezos.Schema)
   end
 
+  let indexing_strategy () = 
+    Printf.printf "%s: detecting indexing strategy\n" __FILE__;
+    let envvar = "IRMIN_INDEX_STRATEGY" in
+    Sys.getenv_opt envvar |> function
+    | None -> Irmin_pack.Pack_store.Indexing_strategy.always
+    | Some "always" -> Irmin_pack.Pack_store.Indexing_strategy.always
+    | Some "minimal" -> Irmin_pack.Pack_store.Indexing_strategy.minimal
+    | Some s -> failwith (Printf.sprintf "Unrecognized %s envvar value: %s\n" envvar s)
+
   let create_repo config =
-    let conf = Irmin_pack.config ~readonly:false ~fresh:true config.store_dir in
+    let conf = Irmin_pack.config ~readonly:false ~fresh:true ~indexing_strategy:(indexing_strategy()) config.store_dir in
     let* repo = Store.Repo.v conf in
     let on_commit _ _ = Lwt.return_unit in
     let on_end () = Lwt.return_unit in
