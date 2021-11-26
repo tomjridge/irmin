@@ -84,6 +84,7 @@ module Maker
 
     let equal_key = Irmin.Type.(unstage (equal K.t))
 
+(* tjr: commented since Never constructor not recognized; this code came from Ioana's count_hashes branch; it doesn't seem to be used
     let index_direct t hash =
       (* Log.err (fun f -> f "Index"); *)
       match t.pack.index with
@@ -95,7 +96,7 @@ module Maker
           match Index.find index hash with
           | None -> None
           | Some (offset, length, _) -> Some (Pack_key.v ~hash ~offset ~length))
-
+*)
 
     type value = Val.t
     type index = Index.t
