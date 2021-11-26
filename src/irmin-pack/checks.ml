@@ -382,6 +382,29 @@ module Make (M : Maker) = struct
       Cmdliner.Term.(term_internal $ setup_log, info ~doc "stat-store")
   end
 
+  module Print_index = struct
+    let conf root = Conf.init ~readonly:true ~fresh:false root
+
+    let run ~root () =
+      let (module Store : Versioned_store) =
+        match Stat.detect_version ~root with
+        | `V1 -> (module Store_V1)
+        | `V2 -> (module Store_V2)
+      in
+      let conf = conf root in
+      Store.traverse_pack_file (`Print_index Pack_value.Kind.Node) conf;
+      Store.traverse_pack_file (`Print_index Pack_value.Kind.Inode) conf;
+      Store.traverse_pack_file (`Print_index Pack_value.Kind.Commit) conf;
+      Store.traverse_pack_file (`Print_index Pack_value.Kind.Contents) conf
+
+    let term_internal =
+      Cmdliner.Term.(const (fun root () -> run ~root ()) $ path)
+
+    let term =
+      let doc = "Print index." in
+      Cmdliner.Term.(term_internal $ setup_log, info ~doc "print-index")
+  end
+
   module Cli = struct
     open Cmdliner
 
@@ -394,6 +417,7 @@ module Make (M : Maker) = struct
             Integrity_check_inodes.term;
             Integrity_check_index.term;
             Stats_commit.term;
+            Print_index.term;
           ]) () : empty =
       let default =
         let default_info =

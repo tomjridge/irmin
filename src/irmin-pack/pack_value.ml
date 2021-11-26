@@ -2,7 +2,7 @@ open! Import
 include Pack_value_intf
 
 module Kind = struct
-  type t = Commit | Contents | Inode | Node
+  type t = Commit | Contents | Inode | Node [@@deriving irmin ~equal]
 
   let to_magic = function
     | Commit -> 'C'

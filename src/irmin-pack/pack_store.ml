@@ -84,6 +84,19 @@ module Maker
 
     let equal_key = Irmin.Type.(unstage (equal K.t))
 
+    let index_direct t hash =
+      (* Log.err (fun f -> f "Index"); *)
+      match t.pack.index with
+      | Never ->
+          (* Log.err (fun f -> f "Index = Never"); *)
+          None
+      | Always index -> (
+          (* Log.err (fun f -> f "Index = Always"); *)
+          match Index.find index hash with
+          | None -> None
+          | Some (offset, length, _) -> Some (Pack_key.v ~hash ~offset ~length))
+
+
     type value = Val.t
     type index = Index.t
 
