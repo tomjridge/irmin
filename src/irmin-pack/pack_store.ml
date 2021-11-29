@@ -50,6 +50,16 @@ module Indexing_strategy = struct
              
   (* others? *)
 
+  (** Allow setting via a string from an envvar *)
+  let of_string = function
+    | "minimal" -> minimal
+    | "full" -> always
+    | "mini1_gt_8" -> mini1_gt_8
+    | "mini2_gt_32" -> mini2_gt_32
+    | "mini3_gt_128" -> mini3_gt_128
+    | "mini4_inode_root" -> mini4_inode_root
+    | s -> failwith (Printf.sprintf "%s: Unrecognized indexing strategy: %s\n" __FILE__ s)
+
 end
 
 module type S = S with type indexing_strategy := Indexing_strategy.t
