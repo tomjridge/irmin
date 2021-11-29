@@ -480,10 +480,11 @@ module Variable_summary = struct
         | `Linear -> v
         | `Log ->
             if Float.is_infinite v then v
-            else if v <= 0. then
-              failwith
-                "Input samples to a Variable_summary should be > 0. when \
-                 scale=`Log."
+            else if v < 0. then 
+              failwith "Input samples to a Variable_summary should not be negative when scale=`Log"
+            else if v = 0. then (
+              Printf.printf "Warning! Detected duration of length 0; ignoring for now\n";
+              1.)
             else Float.log v
       in
       let histo = Bentov.add v histo in
