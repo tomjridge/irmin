@@ -30,7 +30,7 @@ module Make_internal
                and type node_key = Key.t) =
 struct
   (** If [should_be_stable ~length ~root] is true for an inode [i], then [i]
-      hashes the same way as a [Node.t] containings the same entries. *)
+      hashes the same way as a [Node.t] containing the same entries. *)
   let should_be_stable ~length ~root =
     if length = 0 then true
     else if not root then false
@@ -83,7 +83,9 @@ struct
     open T
 
     type t [@@deriving irmin]
+    type v = private Key of Key.t | Hash of hash Lazy.t
 
+    val inspect : t -> v
     val of_key : key -> t
     val of_hash : hash Lazy.t -> t
     val promote_exn : t -> key -> unit
@@ -98,25 +100,29 @@ struct
         [of_concrete_exn]) lazily-computed hashes are used instead. If such
         values are persisted, the hash reference can be promoted to a key
         reference (but [Key] values are never demoted to hashes). *)
-    type v = Key of Key.t | Hash of hash Lazy.t [@@deriving irmin]
+    type v = Key of Key.t | Hash of hash Lazy.t [@@deriving irmin ~pp_dump]
 
     type t = v ref
 
+    let inspect t = !t
     let of_key k = ref (Key k)
     let of_hash h = ref (Hash h)
 
     let promote_exn t k =
-      match !t with
-      | Key k' ->
-          (* It's valid for [k] and [k'] not to be strictly equal, because of
-             store duplicates. TODO: justify this better. *)
-          assert (equal_hash (Key.to_hash k) (Key.to_hash k'))
-          (* TODO: raise proper exception *)
-      | Hash h' ->
-          let h = Key.to_hash k in
-          assert (equal_hash h (Lazy.force h'))
-          (* XXX: TODO, raise proper exception *);
-          t := Key k
+      let existing_hash =
+        match !t with
+        | Key k' ->
+            (* NOTE: it's valid for [k'] to not be strictly equal to [k], because
+               of duplicate objects in the store. In this case, we preferentially
+               take the newer key. *)
+            Key.to_hash k'
+        | Hash h -> Lazy.force h
+      in
+      if not (equal_hash existing_hash (Key.to_hash k)) then
+        Fmt.failwith
+          "Attempted to promote existing reference %a to an inconsistent key %a"
+          pp_dump_v !t pp_key k;
+      t := Key k
 
     let to_hash t =
       match !t with Hash h -> Lazy.force h | Key k -> Key.to_hash k
@@ -155,10 +161,13 @@ struct
     (** Distinguishes between the two possible modes of binary value. *)
     type 'vref mode = Ptr_key : key mode | Ptr_any : Val_ref.t mode
 
-    type 'vref ptr = { index : int; hash (* TODO: better name *) : 'vref }
-    [@@deriving irmin]
+    type 'vref with_index = { index : int; vref : 'vref } [@@deriving irmin]
 
-    type 'vref tree = { depth : int; length : int; entries : 'vref ptr list }
+    type 'vref tree = {
+      depth : int;
+      length : int;
+      entries : 'vref with_index list;
+    }
     [@@deriving irmin]
 
     type 'vref v = Values of (step * value) list | Tree of 'vref tree
@@ -604,7 +613,6 @@ struct
                    users can discard using [clear]. *)
                 entry
             | { target = Lazy key } as t -> (
-                (* let h = hash layout t in *)
                 match find key with
                 | None -> Fmt.failwith "%a: unknown key" pp_key key
                 | Some x ->
@@ -623,20 +631,18 @@ struct
         | Partial _ -> fun target -> { target = Dirty target }
         | Truncated -> fun target -> Intact target
 
-      let _of_hash : type ptr. ptr layout -> hash -> ptr = function
-        | Total -> assert false
-        | Partial _ -> assert false (* TODO: remove? *)
-        | Truncated -> fun hash -> Broken (Val_ref.of_hash (lazy hash))
-
       let of_key : type ptr. ptr layout -> key -> ptr = function
         | Total -> assert false
         | Partial _ -> fun key -> { target = Lazy key }
         | Truncated -> fun key -> Broken (Val_ref.of_key key)
 
+      type ('input, 'output) cps = { f : 'r. 'input -> ('output -> 'r) -> 'r }
+      [@@ocaml.unboxed]
+
       let save :
           type ptr.
           broken:(hash -> key) ->
-          save_dirty:(ptr t -> key) ->
+          save_dirty:(ptr t, key) cps ->
           clear:bool ->
           ptr layout ->
           ptr ->
@@ -645,26 +651,26 @@ struct
         (* Invariant: TODO (after return, we can get the key) *)
         | Total ->
             fun (Total_ptr entry) ->
-              let key = save_dirty entry (* TODO: make tailcall? *) in
-              Val_ref.promote_exn entry.v_ref key
+              save_dirty.f entry (fun key ->
+                  Val_ref.promote_exn entry.v_ref key)
         | Partial _ -> (
             function
             | { target = Dirty entry } as box ->
-                let key = save_dirty entry (* TODO: make tailcall? *) in
-                if clear then box.target <- Lazy key
-                else (
-                  box.target <- Lazy_loaded entry;
-                  Val_ref.promote_exn entry.v_ref key)
+                save_dirty.f entry (fun key ->
+                    if clear then box.target <- Lazy key
+                    else (
+                      box.target <- Lazy_loaded entry;
+                      Val_ref.promote_exn entry.v_ref key))
             | { target = Lazy_loaded entry } as box ->
                 (* TODO: Why do we save here anyway? *)
-                let key = save_dirty entry (* TODO: make tailcall? *) in
-                if clear then box.target <- Lazy key
+                save_dirty.f entry (fun key ->
+                    if clear then box.target <- Lazy key)
             | { target = Lazy _ } -> ())
         | Truncated -> (
             function
             | Intact entry ->
-                let key = save_dirty entry (* TODO: make tailcall? *) in
-                Val_ref.promote_exn entry.v_ref key
+                save_dirty.f entry (fun key ->
+                    Val_ref.promote_exn entry.v_ref key)
             | Broken vref -> (
                 (* TODO: add this to val_ref *)
                 match Val_ref.to_key vref with
@@ -815,7 +821,7 @@ struct
           let vs = StepMap.bindings vs in
           Bin.Values vs
       | Tree t ->
-          let hash_of_ptr : ptr -> vref =
+          let vref_of_ptr : ptr -> vref =
             match mode with
             | Bin.Ptr_any -> Ptr.val_ref layout
             | Bin.Ptr_key -> Ptr.key_exn layout
@@ -825,8 +831,8 @@ struct
               (fun (i, acc) -> function
                 | None -> (i + 1, acc)
                 | Some ptr ->
-                    let hash = hash_of_ptr ptr in
-                    (i + 1, { Bin.index = i; hash } :: acc))
+                    let vref = vref_of_ptr ptr in
+                    (i + 1, { Bin.index = i; vref } :: acc))
               (0, []) t.entries
           in
           let entries = List.rev entries in
@@ -1047,8 +1053,8 @@ struct
             let entries = Array.make Conf.entries None in
             let ptr_of_key = Ptr.of_key layout in
             List.iter
-              (fun { Bin.index; hash } ->
-                entries.(index) <- Some (ptr_of_key hash))
+              (fun { Bin.index; vref } ->
+                entries.(index) <- Some (ptr_of_key vref))
               t.entries;
             Tree { depth = t.Bin.depth; length = t.length; entries }
       in
@@ -1062,7 +1068,7 @@ struct
 
     let empty : 'a. 'a layout -> 'a t =
      fun _ ->
-      let v_ref = Val_ref.of_hash (lazy (Node.hash Node.empty)) in
+      let v_ref = Val_ref.of_hash (lazy (Node.hash (Node.empty ()))) in
       { root = false; v_ref; v = Values StepMap.empty }
 
     let values layout vs =
@@ -1265,32 +1271,35 @@ struct
       let rec aux ~depth t =
         [%log.debug "save depth:%d" depth];
         match t.v with
-        | Values _ ->
-            let key =
-              add
-                (Val_ref.to_hash
-                   t.v_ref (* TODO: pass [key] here if we have it? *))
-                (to_bin layout Bin.Ptr_key
-                   t (* TODO: justify why this is safe *))
+        | Values _ -> (
+            let unguarded_add hash =
+              let value =
+                to_bin layout Bin.Ptr_key t
+                (* TODO: justify why this is safe *)
+              in
+              let key = add hash value in
+              Val_ref.promote_exn t.v_ref key;
+              key
             in
-            Val_ref.promote_exn t.v_ref key;
-            key
+            match Val_ref.inspect t.v_ref with
+            | Key key ->
+                if mem key then key else unguarded_add (Key.to_hash key)
+            | Hash hash -> unguarded_add (Lazy.force hash))
         | Tree n ->
-            iter_entries
-              ~save_dirty:(fun t ->
-                let hash =
-                  Val_ref.to_hash t.v_ref
-                  (* TODO: use [key] here if it exists? *)
-                in
-                let key =
-                  match index hash with
-                  | None -> aux ~depth:(depth + 1) t
-                  | Some key ->
-                      if mem key then key else aux ~depth:(depth + 1) t
-                in
-                Val_ref.promote_exn t.v_ref key;
-                key)
-              n.entries;
+            let save_dirty t k =
+              let key =
+                match Val_ref.inspect t.v_ref with
+                | Key key -> if mem key then key else aux ~depth:(depth + 1) t
+                | Hash hash -> (
+                    match index (Lazy.force hash) with
+                    | Some key ->
+                        if mem key then key else aux ~depth:(depth + 1) t
+                    | None -> aux ~depth:(depth + 1) t)
+              in
+              Val_ref.promote_exn t.v_ref key;
+              k key
+            in
+            iter_entries ~save_dirty:{ f = save_dirty } n.entries;
             let key =
               add (Val_ref.to_hash t.v_ref)
                 (to_bin layout Bin.Ptr_key
@@ -1400,9 +1409,9 @@ struct
         (* TODO: remove [Indirect] case. *)
         (* Compress.Indirect off *)
       in
-      let ptr : T.key Bin.ptr -> Compress.ptr =
+      let ptr : T.key Bin.with_index -> Compress.ptr =
        fun n ->
-        let hash = hash n.hash in
+        let hash = hash n.vref in
         { index = n.index; hash }
       in
       let value : T.step * T.value -> Compress.value = function
@@ -1455,10 +1464,10 @@ struct
             key_of_offset off
         | Direct n -> n
       in
-      let ptr : Compress.ptr -> T.key Bin.ptr =
+      let ptr : Compress.ptr -> T.key Bin.with_index =
        fun n ->
-        let hash = key n.hash in
-        { index = n.index; hash }
+        let vref = key n.hash in
+        { index = n.index; vref }
       in
       let value : Compress.value -> T.step * T.value = function
         | Contents (n, h, metadata) ->
@@ -1544,7 +1553,7 @@ struct
     let list ?offset ?length ?cache t =
       List.of_seq (seq ?offset ?length ?cache t)
 
-    let empty = of_list []
+    let empty () = of_list []
     let is_empty t = apply t { f = (fun _ v -> I.is_empty v) }
 
     let find ?cache t s =
@@ -1784,7 +1793,6 @@ module Make_persistent
                 and type Val.step = Node.step)
     (CA : Pack_store.Maker
             with type hash = H.t
-             and type key = H.t Pack_key.t
              and type index := Pack_index.Make(H).t) =
 struct
   module Persistent_pack = CA.Make (Inter.Raw)
