@@ -26,6 +26,30 @@ module Indexing_strategy = struct
            indexed (as they may be referenced via hash by other V0 objects), and
            this must be accounted for when reconstructing the index. *)
         true
+
+  (** This is really just for comparison for the fully minimal
+     strategy; but perhaps there are lots of contents with len <= 8?
+     *)
+  let mini1_gt_8 : t = fun ~value_length -> function
+    | Contents -> (value_length > 8) (* ie index if len > 8 *)
+    | x -> minimal ~value_length x
+
+  (** 32 is roughly the overhead of storing something in the index *)
+  let mini2_gt_32 : t = fun ~value_length -> function
+    | Contents -> (value_length > 32) (* ie index if len > 32 *)
+    | x -> minimal ~value_length x
+
+  (** Index contents at a somewhat arbitrary length of 128 *)
+  let mini3_gt_128 : t = fun ~value_length -> function
+    | Contents -> (value_length > 128) (* ie index if len > 128 *)
+    | x -> minimal ~value_length x
+
+  let mini4_inode_root : t = fun ~value_length -> function
+    | Inode_v1_root -> true
+    | x -> mini2_gt_32 ~value_length x
+             
+  (* others? *)
+
 end
 
 module type S = S with type indexing_strategy := Indexing_strategy.t
