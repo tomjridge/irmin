@@ -4,7 +4,7 @@ include Pack_store_intf
 module Indexing_strategy = struct
   type t = value_length:int -> Pack_value.Kind.t -> bool
 
-  let always ~value_length:_ _ = true
+  let always : t = fun ~value_length:_ _ -> true
 
   let minimal : t =
    fun ~value_length:_ -> function
@@ -26,6 +26,8 @@ module Indexing_strategy = struct
            indexed (as they may be referenced via hash by other V0 objects), and
            this must be accounted for when reconstructing the index. *)
         true
+
+  let default = minimal
 
   (** This is really just for comparison for the fully minimal
      strategy; but perhaps there are lots of contents with len <= 8?
@@ -50,7 +52,9 @@ module Indexing_strategy = struct
              
   (* others? *)
 
-  (** Allow setting via a string from an envvar *)
+  (** Allow setting via a string from an envvar; NOTE "always" is
+     represented as the string "full" to agree with "minimal" FIXME
+     change "always" to "full"? *)
   let of_string = function
     | "minimal" -> minimal
     | "full" -> always

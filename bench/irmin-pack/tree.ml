@@ -211,10 +211,8 @@ module Make_basic (Maker : Irmin_pack.Maker) (Conf : Irmin_pack.Conf.S) = struct
     Printf.printf "%s: detecting indexing strategy\n" __FILE__;
     let envvar = "IRMIN_INDEX_STRATEGY" in
     Sys.getenv_opt envvar |> function
-    | None -> Irmin_pack.Pack_store.Indexing_strategy.always
-    | Some "always" -> Irmin_pack.Pack_store.Indexing_strategy.always
-    | Some "minimal" -> Irmin_pack.Pack_store.Indexing_strategy.minimal
-    | Some s -> failwith (Printf.sprintf "Unrecognized %s envvar value: %s\n" envvar s)
+    | None -> Irmin_pack.Pack_store.Indexing_strategy.default
+    | Some s -> Irmin_pack.Pack_store.Indexing_strategy.of_string s
 
   let create_repo config =
     let conf = Irmin_pack.config ~readonly:false ~fresh:true ~indexing_strategy:(indexing_strategy()) config.store_dir in

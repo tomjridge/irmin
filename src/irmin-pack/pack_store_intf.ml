@@ -76,6 +76,17 @@ module type Sigs = sig
     val minimal : t
     (** The strategy that indexes as few objects as possible while still
         maintaing store integrity. *)
+
+    val default : t 
+    (** The default indexing strategy; currently minimal. *)
+
+    val mini1_gt_8 : t
+    (** This and following for benchmarking purposes. *)
+    val mini2_gt_32 : t
+    val mini3_gt_128 : t
+    val mini4_inode_root : t
+    val of_string : string -> t
+
   end
 
   module type S = S with type indexing_strategy := Indexing_strategy.t
