@@ -58,10 +58,10 @@ module Indexing_strategy = struct
   let of_string = function
     | "minimal" -> minimal
     | "full" -> always
-    | "mini1_gt_8" -> mini1_gt_8
-    | "mini2_gt_32" -> mini2_gt_32
-    | "mini3_gt_128" -> mini3_gt_128
-    | "mini4_inode_root" -> mini4_inode_root
+    | "mini1_gt_8" | "mini1" -> mini1_gt_8
+    | "mini2_gt_32" | "mini2" -> mini2_gt_32
+    | "mini3_gt_128" | "mini3" -> mini3_gt_128
+    | "mini4_inode_root" | "mini4" -> mini4_inode_root
     | s -> failwith (Printf.sprintf "%s: Unrecognized indexing strategy: %s\n" __FILE__ s)
 
 end
