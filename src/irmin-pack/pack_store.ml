@@ -46,9 +46,13 @@ module Indexing_strategy = struct
     | Contents -> (value_length > 128) (* ie index if len > 128 *)
     | x -> minimal ~value_length x
 
-  let mini4_inode_root : t = fun ~value_length -> function
+  let mini4_gt_256 : t = fun ~value_length -> function
+    | Contents -> (value_length > 256) (* ie index if len > 256 *)
+    | x -> minimal ~value_length x
+
+  let mini5_inode_root : t = fun ~value_length -> function
     | Inode_v1_root -> true
-    | x -> mini2_gt_32 ~value_length x
+    | x -> mini4_gt_256 ~value_length x (* NOTE changed from mini2 *)
              
   (* others? *)
 
@@ -56,12 +60,13 @@ module Indexing_strategy = struct
      represented as the string "full" to agree with "minimal" FIXME
      change "always" to "full"? *)
   let of_string = function
-    | "minimal" -> minimal
-    | "full" -> always
-    | "mini1_gt_8" | "mini1" -> mini1_gt_8
-    | "mini2_gt_32" | "mini2" -> mini2_gt_32
-    | "mini3_gt_128" | "mini3" -> mini3_gt_128
-    | "mini4_inode_root" | "mini4" -> mini4_inode_root
+    | "minimal" | "0" -> minimal
+    | "1" -> mini1_gt_8
+    | "2" -> mini2_gt_32
+    | "3" -> mini3_gt_128
+    | "4" -> mini4_gt_256
+    | "5" -> mini5_inode_root
+    | "full" | "6" -> always
     | s -> failwith (Printf.sprintf "%s: Unrecognized indexing strategy: %s\n" __FILE__ s)
 
 end
