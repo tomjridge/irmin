@@ -32,27 +32,32 @@ module Indexing_strategy = struct
   (** This is really just for comparison for the fully minimal
      strategy; but perhaps there are lots of contents with len <= 8?
      *)
-  let mini1_gt_8 : t = fun ~value_length -> function
+  let gt8 : t = fun ~value_length -> function
     | Contents -> (value_length > 8) (* ie index if len > 8 *)
     | x -> minimal ~value_length x
 
   (** 32 is roughly the overhead of storing something in the index *)
-  let mini2_gt_32 : t = fun ~value_length -> function
+  let gt32 : t = fun ~value_length -> function
     | Contents -> (value_length > 32) (* ie index if len > 32 *)
     | x -> minimal ~value_length x
 
   (** Index contents at a somewhat arbitrary length of 128 *)
-  let mini3_gt_128 : t = fun ~value_length -> function
+  let gt128 : t = fun ~value_length -> function
     | Contents -> (value_length > 128) (* ie index if len > 128 *)
     | x -> minimal ~value_length x
-
-  let mini4_gt_256 : t = fun ~value_length -> function
+             
+  (** Again, somewhat arbitary length of 256 *)
+  let gt256 : t = fun ~value_length -> function
     | Contents -> (value_length > 256) (* ie index if len > 256 *)
     | x -> minimal ~value_length x
 
-  let mini5_inode_root : t = fun ~value_length -> function
+  let gt256_iroot : t = fun ~value_length -> function
     | Inode_v1_root -> true
-    | x -> mini4_gt_256 ~value_length x (* NOTE changed from mini2 *)
+    | x -> gt256 ~value_length x (* NOTE was mini2 *)
+
+  let min_iroot : t = fun ~value_length -> function
+    | Inode_v1_root -> true
+    | x -> minimal ~value_length x (* NOTE minimal, compared to gt_256 *)
              
   (* others? *)
 
@@ -61,12 +66,13 @@ module Indexing_strategy = struct
      change "always" to "full"? *)
   let of_string = function
     | "minimal" | "0" -> minimal
-    | "1" -> mini1_gt_8
-    | "2" -> mini2_gt_32
-    | "3" -> mini3_gt_128
-    | "4" -> mini4_gt_256
-    | "5" -> mini5_inode_root
-    | "full" | "6" -> always
+    | "1" -> gt8
+    | "2" -> gt32
+    | "3" -> gt128
+    | "4" -> gt256
+    | "5" -> gt256_iroot
+    | "6" -> min_iroot
+    | "full" | "7" -> always
     | s -> failwith (Printf.sprintf "%s: Unrecognized indexing strategy: %s\n" __FILE__ s)
 
 end
