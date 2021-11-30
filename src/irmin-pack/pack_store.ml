@@ -260,7 +260,7 @@ module Maker
       | Some key' -> (
           match Pack_key.inspect key' with
           | Direct { offset; length; _ } -> { offset; length }
-          | Direct_unknown_length _ | Indexed _ ->
+          | Indexed _ ->
               (* [index_direct] returns only [Direct] keys. *)
               assert false)
       | None ->
@@ -321,7 +321,7 @@ module Maker
       let key = Pack_key.inspect k in
       match key with
       | Indexed hash -> Index.mem t.pack.index hash
-      | Direct { offset; _ } | Direct_unknown_length { offset; _ } ->
+      | Direct { offset; _ } ->
           let minimal_entry_length = Hash.hash_size + 1 in
           let io_offset = IO.offset t.pack.block in
           if
@@ -384,6 +384,7 @@ module Maker
         invalid_read "Read %d bytes (at offset %a) but expected %d" n Int63.pp
           off len;
       let key_of_offset offset =
+        [%log.debug "key_of_offset: %a" Int63.pp offset];
         (* Attempt to eagerly read the length at the same time as reading the
            hash in order to save an extra IO read when dereferencing the key: *)
         let { Entry_prefix.hash; value_length; _ } =
@@ -401,8 +402,11 @@ module Maker
                header during [find]. *)
             Pack_key.v_indexed hash
       in
+      let key_of_hash = Pack_key.v_indexed in
       let dict = Dict.find t.pack.dict in
-      Val.decode_bin ~key_of_offset ~dict (Bytes.unsafe_to_string buf) (ref 0)
+      Val.decode_bin ~key_of_offset ~key_of_hash ~dict
+        (Bytes.unsafe_to_string buf)
+        (ref 0)
 
     let pp_io ppf t =
       let name = Filename.basename (Filename.dirname (IO.name t.pack.block)) in
@@ -410,38 +414,16 @@ module Maker
       Fmt.pf ppf "%s%s" name mode
 
     let find_in_pack_file ~check_integrity t key hash =
-      let { offset; length } =
+      let loc, { offset; length } =
         match Pack_key.inspect key with
         | Direct { offset; length; _ } ->
-            Stats.incr_find_direct ();
-            { offset; length }
-        | Direct_unknown_length { hash = _; offset } ->
-            Stats.incr_find_direct_unknown_length ();
-            let length =
-              (* First try to recover the length from the pack file: *)
-              let prefix = io_read_and_decode_entry_prefix ~off:offset t in
-              match prefix.value_length with
-              | Some value_length -> Hash.hash_size + 1 + value_length
-              | None ->
-                  (* Otherwise, we must check the index: *)
-                  let span = get_entry_span_from_index_exn t hash in
-                  if span.offset <> offset then
-                    corrupted_store
-                      "Attempted to recover the length of the object \
-                       referenced by %a, but the index returned the \
-                       inconsistent binding { offset = %a; length = %d }"
-                      pp_key key Int63.pp span.offset span.length;
-                  span.length
-            in
-            (* Cache the offset and length information in the existing key: *)
-            Pack_key.promote_exn key ~offset ~length;
-            { offset; length }
+            (Stats.Find.Pack_direct, { offset; length })
         | Indexed hash ->
-            Stats.incr_find_indexed ();
             let entry_span = get_entry_span_from_index_exn t hash in
+            (* Cache the offset and length information in the existing key: *)
             Pack_key.promote_exn key ~offset:entry_span.offset
               ~length:entry_span.length;
-            entry_span
+            (Stats.Find.Pack_indexed, entry_span)
       in
       let io_offset = IO.offset t.pack.block in
       if Int63.add offset (Int63.of_int length) > io_offset then (
@@ -454,7 +436,7 @@ module Maker
           "Direct store key references an unknown starting offset %a (length = \
            %d, IO offset = %a)."
           Int63.pp offset length Int63.pp io_offset];
-        None)
+        (Stats.Find.Not_found, None))
       else
         let v = io_read_and_decode ~off:offset ~len:length t in
         Lru.add t.lru hash v;
@@ -464,22 +446,24 @@ module Maker
          | Error (expected, got) ->
              corrupted_store "Got hash %a, expecting %a (for val: %a)." pp_hash
                got pp_hash expected pp_value v);
-        Some v
+        (loc, Some v)
 
     let unsafe_find ~check_integrity t (k : _ Pack_key.t) =
       [%log.debug "[pack:%a] find %a" pp_io t pp_key k];
-      Stats.incr_finds ();
       let hash = Key.to_hash k in
-      match Tbl.find t.staging hash with
-      | v ->
-          Lru.add t.lru hash v;
-          Some v
-      | exception Not_found -> (
-          match Lru.find t.lru hash with
-          | v -> Some v
-          | exception Not_found ->
-              Stats.incr_cache_misses ();
-              find_in_pack_file ~check_integrity t k hash)
+      let location, value =
+        match Tbl.find t.staging hash with
+        | v ->
+            Lru.add t.lru hash v;
+            (Stats.Find.Staging, Some v)
+        | exception Not_found -> (
+            match Lru.find t.lru hash with
+            | v -> (Stats.Find.Lru, Some v)
+            | exception Not_found -> find_in_pack_file ~check_integrity t k hash
+            )
+      in
+      Stats.report_find ~location;
+      value
 
     let find t k =
       let v = unsafe_find ~check_integrity:true t k in
@@ -509,7 +493,7 @@ module Maker
         [%log.debug "[pack] append %a" pp_hash hash];
         let offset_of_key k =
           match Pack_key.inspect k with
-          | Direct { offset; _ } | Direct_unknown_length { offset; _ } ->
+          | Direct { offset; _ } ->
               Stats.incr_appended_offsets ();
               Some offset
           | Indexed hash -> (
@@ -523,7 +507,7 @@ module Maker
         in
         let dict = Dict.index t.pack.dict in
         let off = IO.offset t.pack.block in
-        Val.encode_bin ~offset_of_key ~dict v hash (fun s ->
+        Val.encode_bin ~offset_of_key ~dict hash v (fun s ->
             IO.append t.pack.block s);
         let len = Int63.to_int (IO.offset t.pack.block -- off) in
         let key = Pack_key.v_direct ~hash ~offset:off ~length:len in
@@ -536,6 +520,7 @@ module Maker
         if Tbl.length t.staging >= auto_flush then flush t
         else Tbl.add t.staging hash v;
         Lru.add t.lru hash v;
+        [%log.debug "[pack] append done %a <- %a" pp_hash hash pp_key key];
         key
       in
       match ensure_unique_indexed with
