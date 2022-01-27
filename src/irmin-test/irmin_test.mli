@@ -14,6 +14,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *)
 
+(* FIXME what is this library??? *)
+
 module type S = Common.S
 module type Generic_key = Common.Generic_key
 module type Layered_store = Common.Layered_store

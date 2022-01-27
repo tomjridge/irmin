@@ -45,9 +45,9 @@ end
 
 module type Args = sig
   module Hash : Irmin.Hash.S
-  module Index : Pack_index.S with type key := Hash.t
+  module Index : Pack_index.S with type key := Hash.t (* presumably only needed for the index fixup code *)
   module Inode : Inode.S with type hash := Hash.t
-  module Dict : Pack_dict.S
+  (* module Dict : Pack_dict.S *)
   module Contents : Pack_value.S
   module Commit : Pack_value.S
 end
@@ -170,16 +170,18 @@ end = struct
 
   let decode_entry_exn ~off ~buffer ~buffer_off =
     try
-      let buffer_pos = ref buffer_off in
+      let pos = ref buffer_off in
       (* Decode the key and kind by hand *)
-      let key = decode_key buffer buffer_pos in
-      assert (!buffer_pos = buffer_off + Hash.hash_size);
-      let kind = decode_kind buffer buffer_pos in
-      assert (!buffer_pos = buffer_off + Hash.hash_size + 1);
+      let key = decode_key buffer pos in
+      assert (!pos = buffer_off + Hash.hash_size);
+      let kind = decode_kind buffer pos in
+      assert (!pos = buffer_off + Hash.hash_size + 1);
       (* Get the length of the entire entry *)
       let entry_len = decode_entry_length kind buffer buffer_off in
       { key; data = (off, entry_len, kind) }
     with
+    (* FIXME don't understand these - checking for exact string match??? fragile; and at
+       least the "String.blit" one isn't an error msg that can occur? *)
     | Invalid_argument msg when msg = "index out of bounds" ->
         raise Not_enough_buffer
     | Invalid_argument msg when msg = "String.blit / Bytes.blit_string" ->
@@ -317,3 +319,148 @@ end = struct
             msg Mtime.Span.pp run_duration x.idx_pack pp_binding x.binding
             store_stats]
 end
+
+
+
+(** Refactored version of above code, to isolate pack reading *)
+module Private = struct
+
+  (* abbrev *)
+  open struct
+    module P = struct
+      include Printf
+      let s = sprintf
+    end
+  end
+  
+  (* NOTE as before, but no index *)
+  module type Args = sig
+    module Hash : Irmin.Hash.S
+    module Inode : Inode.S with type hash := Hash.t
+    module Contents : Pack_value.S
+    module Commit : Pack_value.S
+  end
+
+  module Make (Args : Args) = struct
+    open Args
+
+    let decode_key = Irmin.Type.(unstage (decode_bin Hash.t))
+    let decode_kind = Irmin.Type.(unstage (decode_bin Pack_value.Kind.t))
+
+
+    let decode_entry_length : Pack_value.Kind.t -> string -> int -> int = function
+      | Pack_value.Kind.Contents -> Contents.decode_bin_length
+      | Commit_v1 | Commit_v2 -> Commit.decode_bin_length
+      | Inode_v1_stable | Inode_v1_unstable | Inode_v2_root | Inode_v2_nonroot ->
+        Inode.decode_bin_length
+
+    type entry = { off:int; len:int; key: Hash.t; kind:Pack_value.Kind.t }
+
+    (** [decode_entry_exn ~off ~buf] returns the entry at the offset [off] in the pack
+        file. [buf] is a buffer (as a string) used for decoding *)
+    let decode_entry_exn ~off ~(buf:string) : [ `Ok of entry | `Error ] =
+      try
+        let buf_pos = ref 0 in
+        (* Decode the key and kind by hand *)
+        let key = decode_key buf buf_pos in
+        let _ = assert (!buf_pos = Hash.hash_size) in
+        let kind = decode_kind buf buf_pos in
+        let _ = assert (!buf_pos = Hash.hash_size + 1) in
+        (* Get the length of the entire entry *)
+        let entry_len = decode_entry_length kind buf 0 in
+        `Ok { key; off; len=entry_len; kind }
+      with
+      | Invalid_argument _ -> 
+        (* [Repr] doesn't yet support buffered binary decoders, so we hack one
+           together by re-interpreting [Invalid_argument _] exceptions from [Repr]
+           as requests for more data. *)
+        `Error
+
+    (* NOTE the following code is rather generic: we have a pread-like file, and we want
+       to read records from it, but we don't know how long each record is; so we read into
+       a buffer, and keep trying to decode items from the buffer; if we fail to decode, we
+       drop the prefix of the buffer we already processed, refill the buffer, and keep
+       going *)
+
+    type state = { 
+      pack_size    : int; (* stop when off = pack_size  *)
+      pack         : IO.t;
+      mutable off  : int; (* offset within pack file *)
+      mutable buf  : bytes; (* buffer for decoding *)
+      mutable boff : int; (* offset within buffer *)
+      mutable blen : int; (* number of bytes from boff that have been loaded from off in
+                             the pack; bytes outside (boff,boff+len-1) should not be
+                             accessed *)
+    }
+
+    (* if not enough data, move data from boff to begnning of buf, and read some more data
+       to fill rest of buf *)
+    let refill_buffer s =
+      (* move (region boff blen) to start of buffer *)
+      begin 
+        let { buf; boff; blen; _ } = s in
+        match boff = 0 with 
+        | true -> ()
+        | false -> 
+          Bytes.blit buf boff buf 0 blen
+      end;
+      s.boff <- 0;
+      let buf,blen = s.buf,s.blen in
+      (* now fill bytes from blen *)
+      let buf_suffix = Bytes.sub buf blen (Bytes.length buf - blen) in      
+      let n = IO.read s.pack ~off:(s.off + blen |> Int63.of_int) buf_suffix in
+      (if n <> Bytes.length buf_suffix then 
+         (* expect end of file *)
+         assert(s.off+blen+n=s.pack_size));
+      s.blen <- s.blen + n;
+      ()         
+
+    (* process a single entry *)
+    let get_entry_and_advance (s:state) =
+      assert(s.off < s.pack_size);
+      let decode () = 
+        let buf = Bytes.sub s.buf s.boff s.blen |> Bytes.to_string in
+        decode_entry_exn ~off:s.off ~buf 
+      in
+      let entry = 
+        match decode () with
+        | `Ok e -> e
+        | `Error ->          
+          refill_buffer s;
+          match decode () with
+          | `Ok e -> e
+          | `Error -> 
+            (* can extend buffer here, or just start with a large buffer *)
+            failwith (P.s "%s: cannot read entry at offset %d with buffer of size %d"
+                        __FILE__ s.off (Bytes.length s.buf))
+      in
+      s.off <- s.off + entry.len; (* new offset to read from *)
+      (* advance boff (and adjust blen) if possible, otherwise refill *)
+      (match entry.len <= s.blen with
+       | true -> (s.boff <- s.boff + entry.len; s.blen <- s.blen - entry.len)
+       | false -> (s.boff <- 0; s.blen <- 0; refill_buffer s));
+      entry
+    
+    let iter_entries f pack =
+      let s = { 
+        pack_size=IO.size pack;
+        pack;
+        off=0;
+        buf=Bytes.create (100*1024*1024); (* 100MB *)
+        boff=0;
+        blen=0;
+      }
+      in
+      refill_buffer s;
+      let rec loop () = 
+        match s.off >= s.pack_size with
+        | true -> ()
+        | false -> 
+          let entry = get_entry_and_advance s in
+          f entry;
+          loop ()
+      in
+      loop ()
+  end
+
+end (* Private *)
