@@ -194,6 +194,8 @@ module type S_generic_key = sig
         [max] (included), following the Merkle graph order. Moreover, the [min]
         boundary is extended as follows:
 
+        FIXME what is the Merkle graph order?
+
         - contents and node objects in [min] stop the traversal; their
           predecessors are not traversed.
         - commit objects in [min] stop the traversal for their commit

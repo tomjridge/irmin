@@ -67,7 +67,7 @@ module Alcotest = struct
         | `Contents -> Fmt.string ppf "contents"
         | `Node `Key -> Fmt.string ppf "key"
         | `Node `Map -> Fmt.string ppf "map"
-        | `Node `Value -> Fmt.string ppf "value"
+        | `Node `Value -> Fmt.string ppf "value" (* ??? what is a Node Value? *)
         | `Node `Pruned -> Fmt.string ppf "pruned")
       ( = )
 end
@@ -129,7 +129,7 @@ let test_paginated_bindings _ () =
   in
   let* () =
     Tree.list ~offset:0 ~length:2 tree []
-    >|= (List.map fst >> check_sorted [ "a"; "aa" ])
+    >|= (List.map fst >> check_sorted [ "a"; "aa" ]) (* FIXME Tree.list doesn't necessarily return in sorted order anymore *)
   in
   let* () =
     Tree.list ~offset:2 ~length:3 tree []

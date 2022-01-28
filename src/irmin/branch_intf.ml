@@ -24,7 +24,8 @@ module type S = sig
   (** The name of the main branch. *)
 
   val is_valid : t -> bool
-  (** Check if the branch is valid. *)
+  (** Check if the branch is valid. *) 
+  (* FIXME what branches are not valid? what is this notion of validity? purely syntactic? *)
 end
 
 module Irmin_key = Key
