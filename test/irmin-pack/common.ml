@@ -54,6 +54,8 @@ module Contents = struct
 
   let kind _ = Irmin_pack.Pack_value.Kind.Contents
 
+  (* Irmin.Hash.Typed has a value type... and hashes are computed from this value; so
+     associating a domain with the hash *)
   module H = Irmin.Hash.Typed (Irmin.Hash.SHA1) (Irmin.Contents.String)
 
   let hash = H.hash

@@ -21,6 +21,8 @@ exception Max_depth of int
 
 (* NOTE 3 modules: Make_internal (* huge *), Make, Make_persistent; Make_internal not used by others; Make used by Make_persistent *)
 
+module X = Irmin.Node.Make (* NOTE head exposes `Inode existence... *)
+
 module Make_internal
     (Conf : Conf.S)
     (H : Irmin.Hash.S) (Key : sig
@@ -28,6 +30,7 @@ module Make_internal
 
       val unfindable_of_hash : hash -> t
     end)
+    (* FIXME following seems an odd module name given the type? Ah, but Irmin.Node is OK... *)
     (Node : Irmin.Node.Generic_key.S
               with type hash = H.t
                and type contents_key = Key.t

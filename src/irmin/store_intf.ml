@@ -175,6 +175,8 @@ module type S_generic_key = sig
     (** [iter t] iterates in topological order over the closure graph of [t]. If
         [rev] is set (by default it is) the traversal is done in reverse order.
 
+        FIXME what is topological order? Pre-order? 
+
         [skip_branch], [skip_commit], [skip_node] and [skip_contents] allow the
         traversal to be stopped when the corresponding objects are traversed. By
         default no objects are skipped.
@@ -184,17 +186,25 @@ module type S_generic_key = sig
         functions do nothing. These functions are not called on skipped objects.
 
         [pred_branch], [pred_commit], [pred_node] and [pred_contents] implicitly
-        define the graph underlying the traversal. By default they exactly match
-        the underlying Merkle graph of the repository [t]. These functions can
-        be used to traverse a slightly modified version of that graph, for
-        instance by modifying [pred_contents] to implicitly link structured
-        contents with other objects in the graph.
+        define the graph underlying the traversal. 
+
+        FIXME what does this mean?
+
+        By default they exactly match the underlying Merkle graph of the repository
+        [t]. 
+
+        FIXME what is the "underlying Merkle graph"?
+        
+        These functions can be used to traverse a slightly modified version of that graph,
+        for instance by modifying [pred_contents] to implicitly link structured contents
+        with other objects in the graph.  FIXME what does this mean?
 
         The traversed objects are all included between [min] (included) and
-        [max] (included), following the Merkle graph order. Moreover, the [min]
-        boundary is extended as follows:
+        [max] (included), following the Merkle graph order. 
 
         FIXME what is the Merkle graph order?
+
+        Moreover, the [min] boundary is extended as follows:
 
         - contents and node objects in [min] stop the traversal; their
           predecessors are not traversed.
@@ -207,7 +217,12 @@ module type S_generic_key = sig
 
         [cache_size] is the size of the LRU used to store traversed objects. If
         an entry is evicted from the LRU, it can be traversed multiple times by
-        {!Repo.iter}. When [cache_size] is [None] (the default), no entries is
+        {!Repo.iter}. 
+
+        FIXME how does this happen, if the graph is a tree? Just if it is a DAG, and we
+        revisti the same commit again without realizing we already traversed it?
+        
+        When [cache_size] is [None] (the default), no entries is
         ever evicted from the cache; hence every object is only traversed once,
         at the cost of having to store all the traversed objects in memory. *)
 

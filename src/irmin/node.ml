@@ -631,7 +631,7 @@ module V1 (N : Generic_key.S with type step = string) = struct
   let import n = { n; entries = N.list n }
   let export t = t.n
   let with_handler _ t = t
-  let head t = N.head t.n
+  let head t = N.head t.n (* NOTE `Inode in type *)
 
   let of_seq entries =
     let n = N.of_seq entries in
