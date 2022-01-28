@@ -19,6 +19,8 @@ include Inode_intf
 
 exception Max_depth of int
 
+(* NOTE 3 modules: Make_internal (* huge *), Make, Make_persistent; Make_internal not used by others; Make used by Make_persistent *)
+
 module Make_internal
     (Conf : Conf.S)
     (H : Irmin.Hash.S) (Key : sig
@@ -2051,7 +2053,7 @@ struct
       in
       apply t { f }
   end
-end
+end (* Make_internal *)
 
 module Make
     (H : Irmin.Hash.S)

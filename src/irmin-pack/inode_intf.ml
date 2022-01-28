@@ -59,6 +59,7 @@ module type S = sig
        and type hash = Hash.t
        and type Portable.hash := hash
 
+  (* FIXME why is this here, separate from decode/encode functions? *)
   val decode_bin_length : string -> int -> int
 end
 

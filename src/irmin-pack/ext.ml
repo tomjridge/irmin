@@ -51,6 +51,7 @@ module Maker (Config : Conf.S) = struct
       module Node = struct
         module Value = Schema.Node (XKey) (XKey)
 
+        (* FIXME CA is really "indexable"? *)
         module CA = struct
           module Inter = Inode.Make_internal (Config) (H) (XKey) (Value)
           include Inode.Make_persistent (H) (Value) (Inter) (Pack)
