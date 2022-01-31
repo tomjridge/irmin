@@ -25,12 +25,17 @@ module X = Irmin.Node.Make (* NOTE head exposes `Inode existence... *)
 
 module Make_internal
     (Conf : Conf.S)
-    (H : Irmin.Hash.S) (Key : sig
+    (H : Irmin.Hash.S) 
+    (Key : sig                          
       include Irmin.Key.S with type hash = H.t
-
+      (* FIXME Irmin.Key.S seems to say each key can be converted into a hash... but is
+         this true for Generic keys? Or is this saying that the inode internal
+         implementation requires a key that can be converted to a hash?  *)
+      (* FIXME what does this function do? what is the meaning of "unfindable_of_hash?" *)
       val unfindable_of_hash : hash -> t
     end)
     (* FIXME following seems an odd module name given the type? Ah, but Irmin.Node is OK... *)
+    (* NOTE Node includes the step type *)
     (Node : Irmin.Node.Generic_key.S
               with type hash = H.t
                and type contents_key = Key.t
@@ -44,6 +49,8 @@ struct
     else if length <= Conf.stable_hash then true
     else false
 
+  (* NOTE this is just an extension of the Node argument module with submodule H and a
+     hash function *)
   module Node = struct
     include Node
     module H = Irmin.Hash.Typed (H) (Node)
@@ -54,6 +61,7 @@ struct
   (* Keep at most 50 bits of information. *)
   let max_depth = int_of_float (log (2. ** 50.) /. log (float Conf.entries))
 
+  (* FIXME what is this module for? general types? *)
   module T = struct
     type hash = H.t [@@deriving irmin ~pp ~to_bin_string ~equal]
     type key = Key.t [@@deriving irmin ~pp ~equal]
@@ -73,7 +81,8 @@ struct
     let raise_dangling_hash c hash =
       let context = "Irmin_pack.Inode." ^ c in
       raise (Dangling_hash { context; hash })
-
+        
+    (* FIXME why do these use Key.unfindable_of_hash? what is unfindable_of_hash? *)
     let unsafe_keyvalue_of_hashvalue = function
       | `Contents (h, m) -> `Contents (Key.unfindable_of_hash h, m)
       | `Node h -> `Node (Key.unfindable_of_hash h)
@@ -83,6 +92,7 @@ struct
       | `Node k -> `Node (Key.to_hash k)
   end
 
+  (* keys are H.t; values are T.step; result sig is from Hash.Typed *)
   module Step =
     Irmin.Hash.Typed
       (H)
@@ -95,8 +105,14 @@ struct
   module Child_ordering : Child_ordering with type step := T.step = struct
     open T
 
+    (* why bytes here? is this the name under which each child is accessed? *)
     type key = bytes
 
+    (* FIXME meaning? Conf.entries is the branching factor for inodes (?); so log_entry is
+       the log of this? NOTE log (x) / log (y) is log_y x; so the division is really
+       saying "we want this using log_2"; FIXME int_of_float is truncate, so if the result
+       of the float division is (say) 4.99999999 then we would get the wrong answer
+       here since int_of_float would truncate to 4; see check later *)
     let log_entry = int_of_float (log (float Conf.entries) /. log 2.)
 
     let () =
@@ -104,8 +120,16 @@ struct
       (* NOTE: the [`Hash_bits] mode is restricted to inodes with at most 1024
          entries in order to simplify the implementation (see below). *)
       assert ((not (Conf.inode_child_order = `Hash_bits)) || log_entry <= 10);
-      assert (Conf.entries = int_of_float (2. ** float log_entry))
+      (* FIXME this check seems to mean that if we are using `Hash_bits, then log_entry <=
+         10, ie entries is 2047 or less? FIXME 1024 or less??? check math; this check is
+         used below... "at most 10 bits" *)
 
+      assert (Conf.entries = int_of_float (2. ** float log_entry)) 
+    (* FIXME ideally we would use integer operations, not operations involving floats?
+       FIXME if entries has to be a power of 2, why not change the API? eg entries: [
+       `Two_to_the_power int ] *)
+
+    (* FIXME what are hash_bits and seeded_hash? *)
     let key =
       match Conf.inode_child_order with
       | `Hash_bits ->
@@ -117,10 +141,21 @@ struct
        can represented with [n] bits. Then, [hash_bits ~depth k] is
        the [n]-bits integer [i] with the following binary representation:
 
-         [k(n*depth) ... k(n*depth+n-1)]
+         [k(n*depth) ... k(n*depth+n-1)]       
 
        When [n] is not a power of 2, [hash_bits] needs to handle
        unaligned reads properly. *)
+    (* NOTE k(i)..k(j) are the bits of k from i to j inclusive; FIXME n is always a power
+       of 2? what are unaligned reads? 
+       
+       This seems to be setting up using n bits of the cryptographic encoding (with n
+       increasing as depth increases) as a key to follow a path to find an entry;
+       presumably if we don't find it at depth 0, we keep following further; this likely
+       stops adversaries from making the depth too large? they can't force multiple
+       entries to share these hash bits *)
+
+    (* FIXME the return value is an int... with the bottom n bits set? FIXME arg k is the
+       key, which is the hash expressed as bytes *)
     let hash_bits ~depth k =
       assert (Bytes.length k = Step.hash_size);
       (* We require above that the child indices have at most 10 bits to ensure
@@ -1901,6 +1936,7 @@ struct
       in
       apply t { f }
 
+    (* FIXME what does find' do? *)
     let of_raw (find' : expected_depth:int -> key -> key Bin.t option) v =
       Stats.incr_inode_of_raw ();
       let rec find ~expected_depth h =

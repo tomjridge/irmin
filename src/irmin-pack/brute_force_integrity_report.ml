@@ -11,11 +11,13 @@ module type Version_S = sig
   val version : Version.t
 end
 
-
+(* Stuff we need to unmarshal disk contents *)
 module type Args = sig
   module Version : Version_S
   module Hash : Irmin.Hash.S
   module Index : Pack_index.S with type key := Hash.t
+
+  (* NOTE this is the internal inode interface *)
   module Inode_internal : Inode.Internal with type hash := Hash.t
 
   module Inode :
@@ -31,16 +33,35 @@ module type Args = sig
   module Info : Irmin.Info.S with type t = Commit.Info.t
 end
 
+(* Simple mem profiling *)
 let mem_usage ppf =
   Format.fprintf ppf "%.3fGB"
     (Gc.((quick_stat ()).heap_words) * (Sys.word_size / 8)
     |> float_of_int
     |> ( *. ) 1e-9)
 
+(* 
+A hashtbl mapping a key k0 to an association list [(k1,_)...]?  In following, always used
+as: [add_to_assoc_at_key per_hash key off v], so the tbl is "per_hash", key is k0, off is
+k1... v is different for each pass, but for Pass1, it is Pass1.entry:
+
+{[
+    type entry = {
+      len : length;
+      kind : kind;
+      reconstruction : [ `None | `Some of value ];
+      errors : string list;
+    }
+]}
+
+So, each k0 can have multiple associations at different offsets? And presumably these
+offsets are added as we progress through the object.
+*)
 let add_to_assoc_at_key (table : (_, (_ * _) list) Hashtbl.t) k0 k1 v =
   let l = match Hashtbl.find_opt table k0 with None -> [] | Some l -> l in
   Hashtbl.replace table k0 ((k1, v) :: l)
 
+(** Rest of the code in this functor, which exposes a minimal "run" interface *)
 module Make (Args : Args) : sig
   val run : Irmin.config -> Format.formatter -> unit
 end = struct
@@ -69,6 +90,9 @@ end = struct
       Irmin.Type.(triple int63_t int Pack_value.Kind.t)
   end
 
+  (** Offsetmap is a map from offset (int63) to ... something; The locate fun to 'v
+      location tells you that a given offset is above an entry, below an entry, between
+      two entries, or exactly at an entry; only used in pass5*)
   module Offsetmap = struct
     include Stdlib.Map.Make (Int63)
 
@@ -82,6 +106,7 @@ end = struct
       | `Exact of key * 'v ]
     [@@deriving irmin]
 
+    (* Seems to be used only in pass5 *)
     let locate map k : _ location =
       let closest_above = find_first_opt (fun k' -> k' >= k) map in
       let closest_below = find_last_opt (fun k' -> k' <= k) map in
@@ -93,23 +118,28 @@ end = struct
       | None, None -> `Empty
   end
 
+  (** Dates, expressed using int64 *)
   module Datemap = struct
     include Stdlib.Map.Make (Int64)
 
-    (** Available from ocaml 4.12. *)
-    let to_rev_seq map = to_seq map |> List.of_seq |> List.rev |> List.to_seq
+    (** Available from ocaml 4.12. *) (* FIXME this is possibly inefficient; commenting since we don't need for tezos *)
+    (* let to_rev_seq map = to_seq map |> List.of_seq |> List.rev |> List.to_seq *)
   end
 
   let _ = ignore (Offsetmap.locate, Index.value_t, key_equal)
 
+  (** A directed graph; nodes are offsets; edges are (off,off) pairs *)
   module Offsetgraph = Graph.Imperative.Digraph.Concrete (struct
     type t = offset
 
     let compare = Int63.compare
     let equal = ( = )
-    let hash v = Irmin.Type.(short_hash Int63.t |> unstage) v
+    let hash v = Irmin.Type.(short_hash Int63.t |> unstage) v 
+    (* FIXME why not Stdlib?  Also, unstage should be performed once, given the staging
+       hint? *)
   end)
 
+  (** A directed graph; nodes are Hash.t *)
   module Hashgraph = Graph.Imperative.Digraph.Concrete (struct
     type t = Hash.t [@@deriving irmin ~compare ~equal ~short_hash]
 
@@ -118,8 +148,11 @@ end = struct
 
   (** Index pack file *)
   module Pass0 = struct
+    (* What we determine on this pass? For each obj, the length and kind *)
     type entry = { len : length; kind : kind }
 
+    (* We compute this overall structure; # entries; a hash per offset; for each hash, a
+       list of (offset,entry)... which is what? The list for objs reachable? FIXME *)
     type content = {
       entry_count : int;
       per_offset : hash Offsetmap.t;
@@ -152,6 +185,8 @@ end = struct
           raise Not_enough_buffer
 *)
 
+    (* fold_entries folds fun f using acc0 as starter; pack is pack file; note we might as
+       well iter with a ref, since using a hashtbl anyway *)
     let fold_entries ~byte_count pack f acc0 =
       let buffer = ref (Bytes.create (1024 * 1024)) in
       let refill_buffer ~from =
@@ -214,6 +249,7 @@ end = struct
       let per_hash = Hashtbl.create 10_000_000 in
       let acc0 = (0, Offsetmap.empty) in
       let accumulate (idx, per_offset) (off, len, kind, key) =
+        (* idx will be bumped by one each time; per_offset is threaded through *)
         progress (Int63.of_int len);
         if idx mod 2_000_000 = 0 then
           Fmt.epr
@@ -242,9 +278,13 @@ end = struct
 
   (** Partially rebuild values *)
   module Pass1 = struct
+    (* The objects we potentially reconstruct *)
     type value =
       [ `Blob of Contents.t
-      | `Node of Inode_internal.Raw.t * (hash * offset) list
+      | `Node of Inode_internal.Raw.t * (hash * offset) list (* hash and offset of the
+                                                                "indirect children" ? *)
+      (* this is the one we are interested in; see reconstruct_node below *)    
+
       | `Commit of Commit_value.t ]
 
     type entry = {
@@ -324,6 +364,7 @@ end = struct
         in
         let reconstruct_node () : Inode_internal.Raw.t * (hash * offset) list =
           let indirect_children = ref [] in
+          (* find the hash associated with an offset; uses info computed in pass0 *)
           let _hash_of_offset o =
             match Offsetmap.find_opt o pass0.Pass0.per_offset with
             | None ->
@@ -333,16 +374,25 @@ end = struct
                 indirect_children := (key, o) :: !indirect_children;
                 key
           in
-          let bin =
+          let bin : Inode_internal.Raw.t =
+            (* NOTE this is the part where we try to actually decode the raw contents;
+               FIXME what can we do with an Inode_internal.Raw.t? Not much - it is just
+               like Pack_value.S, but with a depth function *)
             Inode_internal.Raw.decode_bin 
-              ~dict:(Dict.find dict)
-              ~key_of_offset:(fun _ -> assert false)
+              ~dict:(Dict.find dict) (* for layered, we know the dictionary is already available *)
+              ~key_of_offset:(fun _ -> assert false) 
+              (* FIXME but these key_of functions will be needed when decoding the inode,
+                 surely? *)
               ~key_of_hash:(fun _ -> assert false)
-              (* ~hash:hash_of_offset FIXME needed? *)
+              (* ~hash:hash_of_offset FIXME needed? NOTE now we have this commented, we
+                 don't get the children??? so we need to somehow fix key_of_offset or
+                 key_of_hash so that we can identify the children during decode? Ugh *)
               (Bytes.unsafe_to_string buffer)
               buffer_off
             (* |> snd *)
           in
+          (* NOTE the snd component is the (hash,offset) of the indirect children FIXME
+             what about direct children? *)
           (bin, !indirect_children)
         in
         let reconstruction, errors =
@@ -376,6 +426,8 @@ end = struct
     type value =
       [ `Blob of Contents.t
       | `Node of Inode.Val.t * (hash * offset) list
+      (* NOTE in pass1 this was Inode_internal.Raw.t * ...; Inode.Val.t have a much more
+         extensive API *)
       | `Commit of Commit_value.t ]
 
     type entry = {
@@ -383,6 +435,7 @@ end = struct
       kind : kind;
       reconstruction :
         [ `None | `Some of value | `Bin_only of Inode_internal.Raw.t ];
+      (* This seems to cover the case where we can't convert a Raw.t to a Inode.Val.t? *)
       errors : string list;
     }
 
@@ -436,7 +489,7 @@ end = struct
       in
 
       let reconstruct_inode key bin =
-        let obj : Inode_internal.Val.t = (* FIXME Inode_internal.Val.of_raw get_raw_inode bin*) failwith "FIXME" in
+        let obj : Inode_internal.Val.t = (* FIXME this function now takes a function (expected_depth -> ...) as argument; Inode_internal.Val.of_raw get_raw_inode bin*) failwith "FIXME" in
         let key' = Inode_internal.Val.hash (* FIXME was rehash *) obj in
         if not (key_equal key key') then
           Fmt.failwith
@@ -1096,4 +1149,4 @@ end = struct
     fun ppf ->
       Format.fprintf ppf "%a\n%!" Pass5.pp pass5;
       ()
-end
+end (* Make *)

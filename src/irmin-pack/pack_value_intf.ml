@@ -69,7 +69,7 @@ module type Sigs = sig
     val length_header_exn : t -> length_header
     (** Raises an exception on [Contents], as the availability of a length
         header is user defined. *)
-  end
+  edn
 
   module type S = S with type kind := Kind.t
   module type Persistent = Persistent with type kind := Kind.t

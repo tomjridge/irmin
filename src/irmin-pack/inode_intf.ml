@@ -16,6 +16,9 @@
 
 open! Import
 
+(* FIXME what is an inode? need ocamldoc here *)
+
+(* NOTE used in the internal intf *)
 module type Child_ordering = sig
   type step
   type key
@@ -24,14 +27,17 @@ module type Child_ordering = sig
   val index : depth:int -> key -> int
 end
 
+(* FIXME An inode value...? Seems to be something like a Node with generic key*)
 module type Value = sig
   type key
 
+  (* same intf as Irmin.Node (Generic_key variant) *)
   include
     Irmin.Node.Generic_key.S
       with type node_key = key
        and type contents_key = key
 
+  (* what does pred do again??? *)
   val pred :
     t ->
     (step option
@@ -45,6 +51,7 @@ module type Value = sig
        and type step := step
        and type metadata := metadata
 
+  (* FIXME here and elsewhere, are we talking about normal nodes, or inodes? *)
   val nb_children : t -> int
 end
 
@@ -101,11 +108,14 @@ module type Internal = sig
   end
 
   module Val : sig
-    include Value with type hash = hash and type key = key
+    include Value (* see intf above *) with type hash = hash and type key = key
 
+    (* FIXME what does the first argument do? convert keys to Raws if possible? and the
+       expected depth argument? *)
     val of_raw : (expected_depth:int -> key -> Raw.t option) -> Raw.t -> t
     val to_raw : t -> Raw.t
 
+    (* save to the pack.store ? FIXME why do we need these additional arguments? *)
     val save :
       add:(hash -> Raw.t -> key) ->
       index:(hash -> key option) ->
