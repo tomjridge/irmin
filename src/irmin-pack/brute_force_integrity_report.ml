@@ -3,6 +3,9 @@ open Irmin
 open! Import
 module IO = IO.Unix
 
+[@@@warning "-26"]
+[@@@warning "-27"]
+
 (* just a placeholder *)
 module type Version_S = sig
   val version : Version.t
@@ -132,7 +135,6 @@ end = struct
       | Node | Inode -> Inode.decode_bin_length
 *)
 
-    [@@@warning "-27"]
     let decode_entry_exn ~off ~buffer ~buffer_off : (offset * int * Pack_value.Kind.t * Hash.t) =
       failwith "FIXME"
 (*
@@ -394,7 +396,7 @@ end = struct
     let run ~progress pass1 =
       let entry_count = Offsetmap.cardinal pass1.Pass1.per_offset in
       let per_hash = Hashtbl.create entry_count in
-
+      
       let get_raw_inode key : Inode_internal.Raw.t option =
         match Hashtbl.find_opt pass1.Pass1.per_hash key with
         | Some Pass1.[ (_, { reconstruction = `Some (`Node (bin, _)); _ }) ] ->

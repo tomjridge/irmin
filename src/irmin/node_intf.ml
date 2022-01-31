@@ -137,7 +137,9 @@ module type S_generic_key = sig
   exception Dangling_hash of { context : string; hash : hash }
 
   (* FIXME this exposes the Inode structure, but is in Irmin core? FIXME what is the
-     meaning of the `Inode value? *)
+     meaning of the `Inode value?  `Inode(d,xys) is an inode at depth d, and xys is a list
+     of (index,hash of child) where index counts from 0 and is just the index of the
+     child... inode? *)
   type head :=
     [ `Node of (step * value) list | `Inode of int * (int * hash) list ]
   [@@deriving irmin]
