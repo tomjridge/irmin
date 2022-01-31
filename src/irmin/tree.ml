@@ -357,8 +357,10 @@ module Make (P : Backend.S) = struct
           | None -> skip path acc
           | Some c -> f_value path c acc >>= f_tree path)
   end
-
+  
   module Node = struct
+    (* FIXME the following could use some comments!!! *)
+
     type value = P.Node.Val.t [@@deriving irmin ~equal ~pp]
     type key = P.Node.Key.t [@@deriving irmin]
     type nonrec ptr_option = key ptr_option

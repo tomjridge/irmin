@@ -18,6 +18,7 @@
 open! Import
 
 module type S = sig
+  (* FIXME these basic types should be documented somewhere *)
   type path [@@deriving irmin]
   type step [@@deriving irmin]
   type metadata [@@deriving irmin]
@@ -45,6 +46,10 @@ module type S = sig
       backend configuration values, as they can perform in-memory operation,
       independently of any given backend. *)
 
+  (* FIXME why is backend "configuration values" being talked about here? what does a
+     "backend configuration value" mean? why would we think that the empty tree would have
+     such a thing? *)
+
   val singleton : path -> ?metadata:metadata -> contents -> t
   (** [singleton k c] is the tree with a single binding mapping the key [k] to
       the contents [c]. *)
@@ -57,6 +62,8 @@ module type S = sig
 
   type elt = [ `Node of node | `Contents of contents * metadata ]
   (** The type for tree elements. *)
+
+  (* FIXME where are the node constructors etc? *)
 
   val v : elt -> t
   (** General-purpose constructor for trees. *)
@@ -73,6 +80,8 @@ module type S = sig
       (e.g. calling {!find} on one of its children) will instead raise a
       {!Pruned_hash} exception. Attempting to export a tree containing pruned
       sub-trees to a repository will fail similarly. *)
+
+  (* FIXME kinded_hash is expected to be already computed from a tree? what if it is just made up? *)
 
   val kind : t -> path -> [ `Contents | `Node ] option Lwt.t
   (** [kind t k] is the type of [s] in [t]. It could either be a tree node or
@@ -104,7 +113,7 @@ module type S = sig
   (** Operations on lazy tree contents. *)
   module Contents : sig
     type t
-    (** The type of lazy tree contents. *)
+    (** The type of lazy tree contents. *) (* FIXME what is meant, exactly, by lazy in this context? *)
 
     val hash : ?cache:bool -> t -> hash
     (** [hash t] is the hash of the {!contents} value returned when [t] is

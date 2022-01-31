@@ -20,7 +20,7 @@ module IO = IO.Unix
 module Maker (Config : Conf.S) = struct
   type endpoint = unit
 
-  include Pack_key.Store_spec
+  include Pack_key.Store_spec (* defines contents_key, node_key and commit_key *)
 
   module Make (Schema : Irmin.Schema.Extended) = struct
     open struct

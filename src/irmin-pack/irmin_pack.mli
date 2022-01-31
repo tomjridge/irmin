@@ -16,3 +16,5 @@
 
 include Irmin_pack_intf.Sigs
 (** @inline *)
+
+module Brute_force_integrity_report = Brute_force_integrity_report
