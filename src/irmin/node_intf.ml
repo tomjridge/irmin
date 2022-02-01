@@ -17,6 +17,8 @@
 
 open! Import
 
+(** [Core] is a module type for "node values", i.e., a map from "step" (like a name in a
+    filesystem) to a node-or-content (directory-or-file).  *)
 module type Core = sig
   (** {1 Node values} *)
 
@@ -45,6 +47,9 @@ module type Core = sig
 
   val of_list : (step * value) list -> t
   (** [of_list l] is the node [n] such that [list n = l]. *)
+  (* NOTE we can collect values to form a [t], but we can't take a [`Node] or [`Contents]
+     directly and make a t? FIXME *)
+
 
   val list :
     ?offset:int -> ?length:int -> ?cache:bool -> t -> (step * value) list
@@ -162,6 +167,8 @@ module type S = sig
        and type node_key = hash
 end
 
+(** Conceptually, a [Node.Portable.t] is a [Node.t] in which all internal keys have been
+    replaced with the hashes of the values they point to. *)
 module type Portable = sig
   type hash
 

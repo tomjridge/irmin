@@ -11,14 +11,21 @@ module type Version_S = sig
   val version : Version.t
 end
 
-(* Stuff we need to unmarshal disk contents *)
+(* Stuff we need to unmarshal disk contents; FIXME what about key type eg for
+   Inode_internal? this presumably has to match what was used to serialize *)
 module type Args = sig
   module Version : Version_S
   module Hash : Irmin.Hash.S
   module Index : Pack_index.S with type key := Hash.t
 
-  (* NOTE this is the internal inode interface *)
+  (* NOTE this is the internal inode interface; NOTE key is unrestrained, but should be
+     hash? or offset? FIXME maybe should be [H.t Pack_key.t] from inode.ml
+     Make_persistent *)
   module Inode_internal : Inode.Internal with type hash := Hash.t
+
+  (* FIXME f. is needed to convert to inode internal keys, whatever they are;
+     alternatively, restrict sig above *)
+  val offset_to_inode_internal_key: Int63.t -> Inode_internal.key
 
   module Inode :
     Inode.S with type key := Hash.t with type value = Inode_internal.Val.t
@@ -147,8 +154,12 @@ end = struct
   end)
 
   (** Index pack file *)
+  (* At end of pass0, we have a commlection of entries (off,len,kind,hash) entries *)
   module Pass0 = struct
-    (* What we determine on this pass? For each obj, the length and kind *)
+    (* What we determine on this pass? For each obj, the length and kind; but per_hash
+       records a map hash -> (offset,entry)assoc_list, so we also have (hash,off) for each
+       entry. Pass0 doesn't attempt to do anything with the internal structure of objects,
+       apart from inspecting the kind *)
     type entry = { len : length; kind : kind }
 
     (* We compute this overall structure; # entries; a hash per offset; for each hash, a
@@ -187,7 +198,7 @@ end = struct
 
     (* fold_entries folds fun f using acc0 as starter; pack is pack file; note we might as
        well iter with a ref, since using a hashtbl anyway *)
-    let fold_entries ~byte_count pack f acc0 =
+    let fold_entries ~byte_count pack f0 acc0 =
       let buffer = ref (Bytes.create (1024 * 1024)) in
       let refill_buffer ~from =
         let read = IO.read pack ~off:from !buffer in
@@ -224,11 +235,13 @@ end = struct
               ~buffer:(Bytes.unsafe_to_string !buffer)
               ~buffer_off
           with
-          | entry ->
+          | (entry : offset * length * Pack_value.Kind.t * hash) ->
+            (* NOTE the last component of the tuple is a hash not a key *)
               let _, entry_len, _, _ = entry in
               let entry_lenL = Int63.of_int entry_len in
               aux ~buffer_off:(buffer_off + entry_len) (off ++ entry_lenL)
-                (f acc entry)
+                (* the entry is accumulated by f *)
+                (f0 acc entry)
           | exception Not_enough_buffer -> (
               let res =
                 if buffer_off > 0 then
@@ -248,6 +261,7 @@ end = struct
     let run ~progress ~byte_count pack =
       let per_hash = Hashtbl.create 10_000_000 in
       let acc0 = (0, Offsetmap.empty) in
+      (* f. accumulate is what we do with each entry (off,len,kind,key) *)
       let accumulate (idx, per_offset) (off, len, kind, key) =
         (* idx will be bumped by one each time; per_offset is threaded through *)
         progress (Int63.of_int len);
@@ -277,6 +291,9 @@ end = struct
   end
 
   (** Partially rebuild values *)
+  (* From pass0 we have (off,len,kind,key) info; now we try to decode the objects internal
+     structure; for blob/contents and commit this is easy; for nodes/inodes, we go via
+     Inode_internal.Raw.t *)
   module Pass1 = struct
     (* The objects we potentially reconstruct *)
     type value =
@@ -301,7 +318,10 @@ end = struct
       extra_errors : string list;
     }
 
-    let fold_entries pack ~byte_count pass0 f acc =
+    (* f. why byte_count is int63? pass0 is from prev pass; f is the accumulator function, with acc the accumulator *)
+    let fold_entries (pack:IO.t) ~(byte_count:int63) (pass0:Pass0.content) 
+        (f:'a -> hash -> offset -> length -> kind -> bytes(*buf*) -> int(*buf_off*) -> 'a) 
+        (acc:'a) =
       let buffer = ref (Bytes.create (1024 * 1024)) in
       let refill_buffer ~from =
         let read = IO.read pack ~off:from !buffer in
@@ -334,6 +354,12 @@ end = struct
       refill_buffer ~from:Int63.zero;
       Offsetmap.fold aux pass0.Pass0.per_offset (0, acc) |> snd
 
+    let _ : 
+      IO.t -> (* pack file *)
+      byte_count:offset ->
+      Pass0.content ->
+      ('a -> hash -> offset -> length -> kind -> bytes -> length -> 'a) -> 'a -> 'a = fold_entries
+
     let run ~progress pack ~byte_count dict pass0 =
       let entry_count = Offsetmap.cardinal pass0.Pass0.per_offset in
       let per_hash = Hashtbl.create entry_count in
@@ -362,15 +388,19 @@ end = struct
             buffer_off
           (* |> snd *)
         in
+        (* NOTE compared to the above, f. reconstruct_node is more complicated *)
         let reconstruct_node () : Inode_internal.Raw.t * (hash * offset) list =
+          (* FIXME what are indirect children? *)
           let indirect_children = ref [] in
           (* find the hash associated with an offset; uses info computed in pass0 *)
-          let _hash_of_offset o =
+          let hash_of_offset o : hash =
+            (* from pass0, lookup offset to find key/hash *)
             match Offsetmap.find_opt o pass0.Pass0.per_offset with
             | None ->
                 Fmt.failwith "Could not find child at offset %a"
                   (Repr.pp Int63.t) o
-            | Some key ->
+            | Some (key:hash) ->
+              (* NOTE as a side effect, we identify this offset as an indirect child *)
                 indirect_children := (key, o) :: !indirect_children;
                 key
           in
@@ -378,11 +408,14 @@ end = struct
             (* NOTE this is the part where we try to actually decode the raw contents;
                FIXME what can we do with an Inode_internal.Raw.t? Not much - it is just
                like Pack_value.S, but with a depth function *)
+            (* NOTE Inode_internal.key is different from key/hash *)
             Inode_internal.Raw.decode_bin 
               ~dict:(Dict.find dict) (* for layered, we know the dictionary is already available *)
-              ~key_of_offset:(fun _ -> assert false) 
+              ~key_of_offset:(offset_to_inode_internal_key) 
               (* FIXME but these key_of functions will be needed when decoding the inode,
-                 surely? *)
+                 surely? FIXME this key_of_offset is hash_of_offset above *)
+              (* NOTE the inode_internal will have a particular key type defined and this
+                 must match up when we deserialize *)
               ~key_of_hash:(fun _ -> assert false)
               (* ~hash:hash_of_offset FIXME needed? NOTE now we have this commented, we
                  don't get the children??? so we need to somehow fix key_of_offset or
@@ -435,7 +468,7 @@ end = struct
       kind : kind;
       reconstruction :
         [ `None | `Some of value | `Bin_only of Inode_internal.Raw.t ];
-      (* This seems to cover the case where we can't convert a Raw.t to a Inode.Val.t? *)
+      (* Bin_only seems to cover the case where we can't convert a Raw.t to a Inode.Val.t? FIXME clarify Bin_only *)
       errors : string list;
     }
 
@@ -564,9 +597,9 @@ end = struct
 
     type t = {
       entry_count : int;
-      graph : Hashgraph.t;
-      commits_per_date : Hash.t Datemap.t;
-      per_offset : hash Offsetmap.t;
+      graph : Hashgraph.t; (* recall: nodes are hashes *)
+      commits_per_date : Hash.t Datemap.t; (* building a map from date to commits on that date *)
+      per_offset : hash Offsetmap.t; (* copied from pass 2 *)
       per_hash : (hash, (offset, entry) assoc) Hashtbl.t;
       extra_errors : string list;
     }
@@ -576,6 +609,18 @@ end = struct
       let graph = Hashgraph.create ~size:entry_count () in
       let commits_per_date = ref Datemap.empty in
       let per_hash = Hashtbl.create entry_count in
+
+      (* aux is called as part of Offsetmap.fold 
+
+         let (_ : int) = Offsetmap.fold aux pass2.Pass2.per_offset 0 in
+
+Offsetmap.fold has type: (offset -> 'a -> 'b -> 'b) -> 'a Offsetmap.t -> 'b -> 'b
+
+here, pass2.per_offset has type hash Offsetmap.t... presumably recordign the has at each offset;
+
+so, 'a = hash/key; 'b is just int (counting the number of entries
+
+      *)
       let aux off key idx =
         let assoc = Hashtbl.find pass2.Pass2.per_hash key in
         let Pass2.{ len; kind; reconstruction; errors } =
@@ -595,12 +640,14 @@ end = struct
               let obj_out =
                 match obj with
                 | (`Commit _ | `Blob _) as x -> x
-                | `Node (x, _) -> `Node x
+                | `Node (x, _) -> `Node x (* throw away children? *)
               in
               let errs = ref [] in
               let link_to_pred (key':Hash.t) : unit =
                 if Hashtbl.mem pass2.Pass2.per_hash key' then
-                  Hashgraph.add_edge graph key key'
+                  Hashgraph.add_edge graph key key' 
+                  (* add an edge from key to key'; key defined as param to aux above;
+                     key', as per error msg below, is for a child *)
                 else
                   let e =
                     Fmt.str "Children hash %a not in pack file" pp_key key'
@@ -611,8 +658,10 @@ end = struct
               let deal_with_blob () = Hashgraph.add_vertex graph key in
               let deal_with_commit c =
                 Hashgraph.add_vertex graph key;
-                link_to_pred (Commit.node c);
+                link_to_pred (Commit.node c); (* Commit.node c returns a hash?? for the
+                                                 tree associated with a commit? *)
                 let date = Commit.info c |> Info.date in
+                (* process parents as well *)
                 List.iter
                   (fun key' ->
                     if not @@ Hashtbl.mem pass2.Pass2.per_hash key' then
@@ -624,18 +673,24 @@ end = struct
                   (Commit.parents c);
                 commits_per_date := Datemap.add date key !commits_per_date
               in
-              let deal_with_node (n, indirect_children) =
+              (* NOTE direct children are dealt with... how? Direct means "addressed by
+                 offset"? Indirect means... ? FIXME what is an indirect child? *)
+              let deal_with_node (n, (indirect_children : (hash * offset) list) ) =
                 Hashgraph.add_vertex graph key;
                 let children =
+                  (* the children are the predecessors... converted to hashes? *)
                   Inode.Val.pred n
                   |> List.map (fun x -> x |> snd |> function `Contents h | `Inode h | `Node h -> h)
                 in
                 List.iter link_to_pred children;
+                (* direct children are those not in indirect_children *)
                 let direct_children =
                   List.filter
                     (fun k -> not (List.mem_assoc k indirect_children))
                     children
                 in
+                (* iterate over indirect_children, checking they appear earlier; so
+                   indirect children are those identified by offset? *)
                 List.iter
                   (fun (k, o) ->
                     if o >= off then
@@ -647,6 +702,7 @@ end = struct
                       in
                       errs := e :: !errs)
                   indirect_children;
+                (* iterate over direct children... accumulating errors for each? *)
                 List.iter
                   (fun k ->
                     let e =
@@ -665,18 +721,19 @@ end = struct
         in
         let errors = errors @ new_errors in
 
+        (* this is where we update per_hash *)
         add_to_assoc_at_key per_hash key off
           { len; kind; reconstruction; errors };
 
         progress Int63.one;
-        idx + 1
+        idx + 1 (* increment idx *)
       in
 
       let (_ : int) = Offsetmap.fold aux pass2.Pass2.per_offset 0 in
       let commits_per_date = !commits_per_date in
       {
         entry_count = pass2.Pass2.entry_count;
-        graph;
+        graph; (* used by pass 4 *)
         commits_per_date;
         per_hash;
         per_offset = pass2.Pass2.per_offset;
@@ -687,22 +744,25 @@ end = struct
   (** Find the commit connectivity *)
   module Pass4 = struct
     type value =
-      [ `Blob of Contents.t | `Node of Inode.Val.t | `Commit of Commit_value.t ]
+      [ `Blob of Contents.t | `Node of Inode.Val.t | `Commit of Commit_value.t ]    
 
     type entry = {
       len : length;
       kind : kind;
       reconstruction :
         [ `None | `Some of value | `Bin_only of Inode_internal.Raw.t ];
-      oldest_commit_successor : hash option;
-      newest_commit_successor : hash option;
+      oldest_commit_successor : hash option; (* the one immediately following... what? the entry is in a map keyed by hash; so the commit that first included this object? *)
+      newest_commit_successor : hash option; (* the newest commit that is a successor of this object *)
       errors : string list;
     }
 
     type t = {
       entry_count : int;
-      per_offset : hash Offsetmap.t;
-      per_hash : (hash, (offset, entry) assoc) Hashtbl.t;
+      per_offset : hash Offsetmap.t; 
+      (* record hash per offset; copied from pass 3; FIXME are the hashes just for
+         commits? Or all objects? Or just some objs? *)
+      per_hash : (hash, (offset, entry) assoc) Hashtbl.t; 
+      (* ah, the entry is part of the value in a map from hash *)
       extra_errors : string list;
     }
 
@@ -710,18 +770,27 @@ end = struct
       let entry_count = pass3.Pass3.entry_count in
       let graph = pass3.Pass3.graph in
 
-      let newest_commit_per_hash = Hashtbl.create entry_count in
+      let newest_commit_per_hash : (hash,hash)Hashtbl.t = Hashtbl.create entry_count in
+      (* from a given commit hash, record that obj with [hash] is reachable? *)
       let rec visit ~commit_hash hash =
         if not @@ Hashtbl.mem newest_commit_per_hash hash then (
           Hashtbl.add newest_commit_per_hash hash commit_hash;
+          (* the above seems to add (hash,commit_hash) *)
           if Hashtbl.length newest_commit_per_hash mod 3 = 0 then
-            progress Int63.one;
-          Hashgraph.iter_succ (visit ~commit_hash) graph hash)
+            progress Int63.one; (* ??? something to do with progress? *)
+          Hashgraph.iter_succ (visit ~commit_hash) graph hash
+          (* iterate over graph successors (which are those objs reachable from the
+             hash? FIXME what entries are added to graph from pass 3?) *)
+        )
       in
+      (* start visiting by visiting a commit *)
       let visit_commit (_date, hash) = visit ~commit_hash:hash hash in
+
+      (* iterate over commits from most recent commit back *)
       Datemap.to_rev_seq pass3.Pass3.commits_per_date |> Seq.iter visit_commit;
 
-      let oldest_commit_per_hash = Hashtbl.create entry_count in
+      (* similar to above block, but now for oldest_commit_per_hash *)
+      let oldest_commit_per_hash : (hash,hash) Hashtbl.t = Hashtbl.create entry_count in
       let rec visit ~commit_hash hash =
         if not @@ Hashtbl.mem oldest_commit_per_hash hash then (
           Hashtbl.add oldest_commit_per_hash hash commit_hash;
@@ -730,15 +799,21 @@ end = struct
           Hashgraph.iter_succ (visit ~commit_hash) graph hash)
       in
       let visit_commit (_date, hash) = visit ~commit_hash:hash hash in
+      
+      (* iterate over commits, in date order, oldest to newest *)
       Datemap.to_seq pass3.Pass3.commits_per_date |> Seq.iter visit_commit;
+
+      (* FIXME following - check that this is the case from code above *)
 
       (* The [newest_commit_per_hash] table now contains all the hashes of all
          the objects reachable from a commit. The missing ones are orphan. *)
-      let per_hash = Hashtbl.create entry_count in
+      let per_hash : (hash, (offset, entry) assoc) Hashtbl.t = Hashtbl.create entry_count in
       let aux off key idx =
+        (* use pass3 info for the key, and the offset *)
         let Pass3.{ len; kind; reconstruction; errors } =
           Hashtbl.find pass3.Pass3.per_hash key |> List.assoc off
         in
+        (* FIXME presumably if oldest_commit_successor exists, so does newest_commit_successor? *)
         let newest_commit_successor =
           Hashtbl.find_opt newest_commit_per_hash key
         in
@@ -748,6 +823,7 @@ end = struct
         let errors =
           match newest_commit_successor with
           | Some _ -> errors
+          (* following indentifies an orphan object *)
           | None -> "orphan from any commit" :: errors
         in
         add_to_assoc_at_key per_hash key off
@@ -797,16 +873,19 @@ end = struct
 
     let run ~progress byte_count pass4 index =
       let entry_count = pass4.Pass4.entry_count in
-      let remaining_index_keys = Hashtbl.create entry_count in
-      let remaining_index_offs = Hashtbl.create entry_count in
-      let invalid_index_keys = Hashtbl.create 1000 in
-      let invalid_index_offs = Hashtbl.create 1000 in
+      let remaining_index_keys : (hash,offset)Hashtbl.t = Hashtbl.create entry_count in
+      let remaining_index_offs : (offset,hash)Hashtbl.t = Hashtbl.create entry_count in
+      let invalid_index_keys : (hash, string(* errmsg*)) Hashtbl.t = Hashtbl.create 1000 in
+      let invalid_index_offs : (offset, string(*errmsg*)) Hashtbl.t = Hashtbl.create 1000 in
 
       (* Step 1 - Detect index entries not mapping well to pack *)
+      (* aux will be used to iterate over the index, whose values are (off,len,kind); key is the hash in the index *)
       let aux key (off, len, kind) =
         let kind = Pack_value.Kind.to_magic kind in
+        (* f. looks up index offset in the offset map from pass 4 *)
         match Offsetmap.locate pass4.Pass4.per_offset off with
         | (`Below _ | `Above _ | `Between _ | `Empty) as loc ->
+          (* these are "errors" - the index should point exactly to an entry in the offset map *)
             let e =
               Fmt.str
                 "The index entry hash=%a, off=%a, len=%d, kind=%c maps to the \
@@ -816,11 +895,15 @@ end = struct
                 loc
             in
             Hashtbl.add invalid_index_keys key e;
+            (* f. stores the index offset in invalid_index_offs *)
             Hashtbl.add invalid_index_offs off e
         | `Exact (_, key') ->
+          (* this is a possibly-correct entry *)
+          (* the `Exact implies f. will always succeed? but this uses key not key', so if key<>key'...? *)
             let Pass4.{ len = len'; kind = kind'; _ } =
               Hashtbl.find pass4.Pass4.per_hash key |> List.assoc off
             in
+            (* if mismatch ... *)
             if not (key_equal key key' && len = len' && kind = kind') then (
               let e =
                 Fmt.str
@@ -833,9 +916,13 @@ end = struct
               Hashtbl.add invalid_index_keys key' e;
               Hashtbl.add invalid_index_offs off e)
             else (
+              (* add (off,key) to remaining_index_offs... why remaining? FIXME just means that this is valid? the valid ones "remain"? *)
+              (* remaining - future steps successively remove elts from the hashtbl, to leave some "remaining" *)
               Hashtbl.add remaining_index_offs off key;
+              (* add (key,off) to remaining_index_keys ... FIXME why remaining? *)
               Hashtbl.add remaining_index_keys key off)
       in
+      (* iterate aux over the index ; iter: (hash -> Index.value -> unit) -> Index.t -> unit; Index.value is (off,len,kind) *)
       Index.iter aux index;
       progress Int63.one;
       Printf.eprintf
@@ -848,8 +935,8 @@ end = struct
         let offs = Hashtbl.find_all remaining_index_keys key in
         let keys = Hashtbl.find_all remaining_index_offs off in
         match (keys, offs) with
-        | [ _ ], [ _ ] -> ()
-        | [], _ | _, [] -> assert false
+        | [ _ ], [ _ ] -> () (* no duplicates *)
+        | [], _ | _, [] -> assert false (* lengths should be same, given prev construction *)
         | _, _ ->
             let e =
               Fmt.str
@@ -865,8 +952,10 @@ end = struct
             Hashtbl.add invalid_index_offs off e
       in
       Hashtbl.iter aux remaining_index_keys;
+      (* remove invalid ones *)
       Hashtbl.to_seq_keys invalid_index_keys
       |> Seq.iter (Hashtbl.remove remaining_index_keys);
+      (* remove invalid offsets *)
       Hashtbl.to_seq_keys invalid_index_offs
       |> Seq.iter (Hashtbl.remove remaining_index_offs);
       progress Int63.one;
@@ -876,6 +965,9 @@ end = struct
         (Hashtbl.length invalid_index_keys);
 
       (* Step 3 - Detect entries that fail to be [find] *)
+      (* for each x in remaining_index_keys, check we can find the key in the index (FIXME
+         why wouldn't we, if the key can from the index?), and check that the offset is
+         [off] *)
       let aux key off =
         match Index.find index key with
         | None ->
@@ -894,6 +986,7 @@ end = struct
               Hashtbl.add invalid_index_keys key e;
               Hashtbl.add invalid_index_offs off e)
       in
+      (* iterate over remaining_index_keys *)
       Hashtbl.iter aux remaining_index_keys;
       Hashtbl.to_seq_keys invalid_index_keys
       |> Seq.iter (Hashtbl.remove remaining_index_keys);
@@ -906,6 +999,7 @@ end = struct
         (Hashtbl.length invalid_index_keys);
 
       (* Step 4 - Attach the Index errors to their pack entry *)
+      (* FIXME what does this do? *)
       let per_hash = Hashtbl.create entry_count in
       let aux off key idx =
         let Pass4.

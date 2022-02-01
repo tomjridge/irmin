@@ -2094,6 +2094,7 @@ struct
   end
 end (* Make_internal *)
 
+(* f. probably used for in-mem instance? *)
 module Make
     (H : Irmin.Hash.S)
     (Key : Irmin.Key.S with type hash = H.t)
@@ -2116,6 +2117,8 @@ struct
   module Val = Inter.Val
 
   type 'a t = 'a Pack.t
+
+  (* f. key is as Key.t, which is Irmin.Key.S with restriction on hash *)
   type key = Key.t [@@deriving irmin ~equal]
   type hash = Hash.t
   type value = Inter.Val.t
@@ -2196,8 +2199,11 @@ struct
             Fmt.str "Problematic inode %a" (Irmin.Type.pp Inter.Val.t) v
           in
           Error msg
+
+  type x = key
 end
 
+(* f. used for irmin-pack *)
 module Make_persistent
     (H : Irmin.Hash.S)
     (Node : Irmin.Node.Generic_key.S
