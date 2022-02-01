@@ -19,21 +19,24 @@ include Inode_intf
 
 exception Max_depth of int
 
-(* NOTE 3 modules: Make_internal (* huge *), Make, Make_persistent; Make_internal not used by others; Make used by Make_persistent *)
+(* NOTE 3 modules: Make_internal (* huge *), Make, Make_persistent; Make_internal creates
+   Internal, which is used by others; Make used by Make_persistent *)
 
 module X = Irmin.Node.Make (* NOTE head exposes `Inode existence... *)
+
+module type Key' = sig
+  include Irmin.Key.S 
+  (* FIXME Irmin.Key.S seems to say each key can be converted into a hash... but is this
+     true for Generic keys? Or is this saying that the inode internal implementation
+     requires a key that can be converted to a hash?  *)
+  (* FIXME what does this f. function do? what is the meaning of "unfindable_of_hash?" *)
+  val unfindable_of_hash : hash -> t
+end
 
 module Make_internal
     (Conf : Conf.S)
     (H : Irmin.Hash.S) 
-    (Key : sig                          
-      include Irmin.Key.S with type hash = H.t
-      (* FIXME Irmin.Key.S seems to say each key can be converted into a hash... but is
-         this true for Generic keys? Or is this saying that the inode internal
-         implementation requires a key that can be converted to a hash?  *)
-      (* FIXME what does this function do? what is the meaning of "unfindable_of_hash?" *)
-      val unfindable_of_hash : hash -> t
-    end)
+    (Key : Key' with type hash = H.t)
     (* FIXME following seems an odd module name given the type? Ah, but Irmin.Node is OK... *)
     (* NOTE Node includes the step type *)
     (Node : Irmin.Node.Generic_key.S
@@ -41,6 +44,8 @@ module Make_internal
                and type contents_key = Key.t
                and type node_key = Key.t) =
 struct
+  (* FIXME what does stable mean? *)
+
   (** If [should_be_stable ~length ~root] is true for an inode [i], then [i]
       hashes the same way as a [Node.t] containing the same entries. *)
   let should_be_stable ~length ~root =
@@ -49,8 +54,8 @@ struct
     else if length <= Conf.stable_hash then true
     else false
 
-  (* NOTE this is just an extension of the Node argument module with submodule H and a
-     hash function *)
+  (* NOTE this is just an extension of the Node argument module with submodule H giving a
+     hash type and a hash function *)
   module Node = struct
     include Node
     module H = Irmin.Hash.Typed (H) (Node)
@@ -59,6 +64,8 @@ struct
   end
 
   (* Keep at most 50 bits of information. *)
+  (* NOTE this is log_ent (2^50); if entries=2, this is 50, otherwise less; if entries is
+     2^5, this is (50 log 2) / (5 log 2) which is 10 *)
   let max_depth = int_of_float (log (2. ** 50.) /. log (float Conf.entries))
 
   (* FIXME what is this module for? general types? *)
@@ -78,6 +85,8 @@ struct
 
     exception Dangling_hash = Node.Dangling_hash
 
+    (* c is context string eg line number/function name *)
+    (* FIXME clarify what is a "dangling hash" *)
     let raise_dangling_hash c hash =
       let context = "Irmin_pack.Inode." ^ c in
       raise (Dangling_hash { context; hash })
@@ -2093,6 +2102,20 @@ struct
       apply t { f }
   end
 end (* Make_internal *)
+
+
+(* check that Make_internal does produce an internal... *)
+module Private_check
+    (Conf:Conf.S)
+    (H:Irmin.Hash.S)
+    (Key:Key' with type hash=H.t)
+    (Node:Irmin.Node.Generic_key.S
+     with type hash = H.t
+      and type contents_key = Key.t
+      and type node_key = Key.t) 
+  : Inode_intf.Internal 
+  = Make_internal(Conf)(H)(Key)(Node)
+
 
 (* f. probably used for in-mem instance? *)
 module Make

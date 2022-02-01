@@ -206,7 +206,7 @@ module type Internal = sig
 
       type error =
         [ `Invalid_hash of hash * hash * t
-        | `Invalid_depth of int * int * t
+        | `Invalid_depth of int * int * t  
         | `Invalid_length of len * int * t
         | `Duplicated_entries of t
         | `Duplicated_pointers of t
