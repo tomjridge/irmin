@@ -77,12 +77,31 @@ struct
 
     type step = Node.step
     [@@deriving irmin ~compare ~to_bin_string ~of_bin_string ~short_hash]
+    (* FIXME to_bin_string, of_bin_string used extensively later; what do they do? encode to a string? repr/src/repr/type_intf.ml has some doc saying it is basically as encode_bin, but without prefixing with length information... if t is string or bytes?
+
+The type is a bit funny: 
+
+  val to_bin_string : 'a t -> ('a -> string) staged
+  (** [to_bin_string t x] use {!val-encode_bin} to convert [x], of type [t], to
+      a string.
+
+      {b NOTE:} When [t] is {!string} or {!bytes}, the original buffer [x] is
+      not prefixed by its size as {!val-encode_bin} would do. If [t] is
+      {!string}, the result is [x] (without copy). *)
+
+so, x is the thing we want to convert, which we sort of expect to be of type 'a... which
+it is becasue ('a -> string) staged =iso= ('a -> string), but the staged annotation means
+that (to_bin_string t) should be bound and used rather than calling to_bin_string t x
+every time.
+ *)
+
 
     type metadata = Node.metadata [@@deriving irmin ~equal]
     type value = Node.value [@@deriving irmin ~equal]
 
     module Metadata = Node.Metadata
 
+    (* FIXME what is a dangling hash? *)
     exception Dangling_hash = Node.Dangling_hash
 
     (* c is context string eg line number/function name *)
@@ -125,6 +144,7 @@ struct
     let log_entry = int_of_float (log (float Conf.entries) /. log 2.)
 
     let () =
+      (* f. means we have at least a branching factor of 2 *)
       assert (log_entry >= 1);
       (* NOTE: the [`Hash_bits] mode is restricted to inodes with at most 1024
          entries in order to simplify the implementation (see below). *)
@@ -137,14 +157,16 @@ struct
     (* FIXME ideally we would use integer operations, not operations involving floats?
        FIXME if entries has to be a power of 2, why not change the API? eg entries: [
        `Two_to_the_power int ] *)
-
+        
     (* FIXME what are hash_bits and seeded_hash? *)
-    let key =
+    let key : step -> key =
       match Conf.inode_child_order with
       | `Hash_bits ->
           fun s -> Bytes.unsafe_of_string (hash_to_bin_string (Step.hash s))
       | `Seeded_hash | `Custom _ ->
           fun s -> Bytes.unsafe_of_string (step_to_bin_string s)
+    (* prev seems to say that we are either using `Hash_bits or `Seeded_hash; if `Hash_bits then we hash the string first, otherwise we use step_to_bin_string *)
+    
 
     (* Assume [k = cryto_hash(step)] (see {!key}) and [Conf.entry] can
        can represented with [n] bits. Then, [hash_bits ~depth k] is
@@ -153,7 +175,8 @@ struct
          [k(n*depth) ... k(n*depth+n-1)]       
 
        When [n] is not a power of 2, [hash_bits] needs to handle
-       unaligned reads properly. *)
+       unaligned reads properly. FIXME n is always a power of 2? given previous assert *)
+    
     (* NOTE k(i)..k(j) are the bits of k from i to j inclusive; FIXME n is always a power
        of 2? what are unaligned reads? 
        
@@ -161,7 +184,7 @@ struct
        increasing as depth increases) as a key to follow a path to find an entry;
        presumably if we don't find it at depth 0, we keep following further; this likely
        stops adversaries from making the depth too large? they can't force multiple
-       entries to share these hash bits *)
+       entries to share these hash bits without spending a lot of CPU? *)
 
     (* FIXME the return value is an int... with the bottom n bits set? FIXME arg k is the
        key, which is the hash expressed as bytes *)
@@ -172,39 +195,52 @@ struct
          (with [1 + 8 + 1]) does not happen for 10-bit indices because 10 is
          even, but [2 + 8 + 1] would occur with 11-byte indices (e.g. when
          [depth=2]). *)
+      (* FIXME why do we need this? also, doesn't 1-8-1 cover 3 bytes? But this is claiemd
+         not to happen "because 10 is even" - meaning that we could never get to an offset
+         of 7bits in an 8bit byte? *)
       let byte = 8 in
       let initial_bit_pos = log_entry * depth in
       let n = initial_bit_pos / byte in
       let r = initial_bit_pos mod byte in
-      if n >= Step.hash_size then raise (Max_depth depth);
+      if n >= Step.hash_size then raise (Max_depth depth); (* should never happen? *)
+      (* following extracts the bits; there are 2 cases: the bits are contained in a byte;
+         and the bits cross 2 bytes *)
       if r + log_entry <= byte then
         (* The index is contained in a single character of the hash *)
         let i = Bytes.get_uint8 k n in
+        (* the bits are at offset r, and of length log_entry (say, 5); eg r=1,len=5:
+           0xxxxx00 the xs mark the bytes we need; so shift by 8 - 5 - 1=2 *)
         let e0 = i lsr (byte - log_entry - r) in
         let r0 = e0 land (Conf.entries - 1) in
         r0
       else
         (* The index spans two characters of the hash *)
+        (* The bits span two bytes of the hash, n(from r...7) and n+1 (from 0..) *)
         let i0 = Bytes.get_uint8 k n in
         let to_read = byte - r in
         let rest = log_entry - to_read in
         let mask = (1 lsl to_read) - 1 in
+        (* r0 contains the most significant bits *)
         let r0 = (i0 land mask) lsl rest in
         if n + 1 >= Step.hash_size then raise (Max_depth depth);
         let i1 = Bytes.get_uint8 k (n + 1) in
         let r1 = i1 lsr (byte - rest) in
-        r0 + r1
+        r0 + r1 (* or just lor the ints together *)
 
     let short_hash = Irmin.Type.(unstage (short_hash bytes))
     let seeded_hash ~depth k = abs (short_hash ~seed:depth k) mod Conf.entries
+    (* the seeded hash is 0..<Conf.entries, based on short_hash, with seed the depth;
+       essentially just a hash of (depth,k), mod Conf.entries *)
 
-    let index =
+    let index : depth:int -> key -> int =
       match Conf.inode_child_order with
       | `Seeded_hash -> seeded_hash
       | `Hash_bits -> hash_bits
       | `Custom f -> f
+
   end
 
+  (** A map from step to ... typically "value" *)
   module StepMap = struct
     include Map.Make (struct
       type t = T.step
@@ -215,16 +251,23 @@ struct
     let of_list l = List.fold_left (fun acc (k, v) -> add k v acc) empty l
   end
 
+  (* See comment below; this is essentially a {b mutable} reference to a value; values can
+     be referenced by key or hash; hashes can be "promoted" to keys (when the object is
+     persisted, the offset is known); from a key we can always get a hash. We expect most
+     code to branch on [inspect t] *)
   module Val_ref : sig
     open T
 
-    type t [@@deriving irmin]
+    type t [@@deriving irmin]  (* a v ref! *)
     type v = private Key of Key.t | Hash of hash Lazy.t
 
     val inspect : t -> v
     val of_key : key -> t
     val of_hash : hash Lazy.t -> t
-    val promote_exn : t -> key -> unit
+
+    val promote_exn : t -> key -> unit 
+    (* FIXME what does prev do??? the type t is a [v ref], so this will replace a ref-to-hash with a ref-to-key *)
+
     val to_hash : t -> hash
     val to_key_exn : t -> key
     val is_key : t -> bool
@@ -256,7 +299,7 @@ struct
             (* NOTE: it's valid for [k'] to not be strictly equal to [k], because
                of duplicate objects in the store. In this case, we preferentially
                take the newer key. *)
-            Key.to_hash k'
+            Key.to_hash k' 
         | Hash h -> Lazy.force h
       in
       if not (equal_hash existing_hash (Key.to_hash k)) then
@@ -296,6 +339,8 @@ struct
       - with either [key]s or [hash]es as pointers to child values, when
         pre-computing the hash of a node with children that haven't yet been
         written to the store. *)
+  (* NOTE for marshaling, we want to use keys (ie the offsets contained in the structured
+     key) as pointers *)
   module Bin = struct
     open T
 
@@ -303,7 +348,11 @@ struct
     type _ mode = Ptr_key : key mode | Ptr_any : Val_ref.t mode
 
     type 'vref with_index = { index : int; vref : 'vref } [@@deriving irmin]
+    (* index is the "index in a list" FIXME? NOTE 'vref is used as T.key in some of the
+       following; also used as Val_ref.t *)
 
+    (* A tree node; has an explicit depth and length; has entries list - which presumably
+       is of the corresponding length *)
     type 'vref tree = {
       depth : int;
       length : int;
@@ -311,6 +360,7 @@ struct
     }
     [@@deriving irmin]
 
+    (* FIXME what is this type? 'vref is used as Val_ref.t; this is the type of "Values" for this Bin module? *)
     type 'vref v = Values of (step * value) list | Tree of 'vref tree
     [@@deriving irmin ~pre_hash]
 
@@ -321,8 +371,11 @@ struct
           type t = Val_ref.t v [@@deriving irmin]
         end)
 
+    (* FIXME ??? hash is a lazy hash; root is a boolean; v is [v] *)
     type 'vref t = { hash : H.t Lazy.t; root : bool; v : 'vref v }
 
+    (* This is creating the repr 'a Irmin.Type.t value; given a vref I.T.t, we can form a
+       vref t I.T.t *)
     let t : type vref. vref Irmin.Type.t -> vref t Irmin.Type.t =
      fun vref_t ->
       let open Irmin.Type in
@@ -335,10 +388,17 @@ struct
       |+ field "v" v_t (fun t -> t.v)
       |> sealr
       |> like ~pre_hash
+    (* looks like this defines a marshalling record with fields; pre_hash is as vref,
+       using the .v field; *)
 
+    (* constructor for 'vref t *)
     let v ~hash ~root v = { hash; root; v }
     let hash t = Lazy.force t.hash
 
+    (* For t.v a tree, we get the associated depth; otherwise for Values we return 0 for
+       the depth when .root, otherwise unknown; FIXME this is complicated semantics; where
+       is is used? It is rebound in Raw, and needed in one of the functor applications -
+       Private_check at least, and then later - grep for Raw.depth *)
     let depth t =
       match t.v with
       | Values _ -> if t.root then Some 0 else None
@@ -349,17 +409,48 @@ struct
   module Compress = struct
     open T
 
+    (* FIXME what is name? *)
     type name = Indirect of int | Direct of step
+
+    (* An address is either indirect off, or direct of hash (why direct? prefer hash_addr?) *)
     type address = Indirect of int63 | Direct of H.t
+                                                   
+    (* NOTE! there are two constructors Indirect, and two Direct; type disambig is used in
+       following to pick the right one 
+
+       Typically, in pattern matching on type value (below), name is first, then address;
+       name is Indirect n or Direct n; address is either Direct h or Indirect h (even tho
+       Indirect looks like it works with an offset).
+       
+       NOTE address: Indirect n is probably a reference to an offset
+    *)
+    
 
     let address_t : address Irmin.Type.t =
       let open Irmin.Type in
-      variant "Compress.address" (fun i d -> function
-        | Indirect x -> i x | Direct x -> d x)
+      variant "Compress.address" 
+        (fun (i:int63 -> address case_p) (d:hash->address case_p) -> function
+           | Indirect x -> i x | Direct x -> d x) 
+      (* prev fun is of type: (int63 -> address case_p) -> (hash -> address case_p) ->
+         address -> address case_p *)
       |~ case1 "Indirect" int63_t (fun x -> Indirect x)
       |~ case1 "Direct" H.t (fun x -> Direct x)
       |> sealv
+    (* variant defines an open variant that is then sealed 
+       
+       variant : string -> 'b -> ('a, 'b, 'b) open_variant
 
+       case1: string -> 'b ty -> ('b -> 'a) -> ('a, 'b -> 'a case_p) case
+
+       ( |~ ) : ('a, 'b, 'c -> 'd) open_variant -> ('a, 'c) case -> ('a, 'b, 'd) open_variant
+
+       sealv: ('a, 'b, 'a -> 'a case_p) open_variant -> 'a ty
+       sealv is "seal variant"
+
+       This is essentially telling Irmin how to construct and destruct the given type and
+       the components? FIXME why can't we just [@@deriving irmin]? *)      
+
+    (* ptr for what? as before, index is "position in list" *)
     type ptr = { index : int; hash : address }
 
     let ptr_t : ptr Irmin.Type.t =
@@ -369,6 +460,7 @@ struct
       |+ field "hash" address_t (fun t -> t.hash)
       |> sealr
 
+    (* similar to Bin.tree type; entries are now all ptrs *)
     type tree = { depth : int; length : int; entries : ptr list }
 
     let tree_t : tree Irmin.Type.t =
@@ -380,12 +472,17 @@ struct
       |+ field "entries" (list ptr_t) (fun t -> t.entries)
       |> sealr
 
+    (* values are contents or nodes; each has a name and address; contents also has
+       metadata; FIXME what is a name here? why does Contents have a name? *)
     type value =
       | Contents of name * address * metadata
       | Node of name * address
 
-    let is_default = T.(equal_metadata Metadata.default)
+    let is_default : metadata -> bool = T.(equal_metadata Metadata.default)
 
+    (* value was defined just above; here there are a lot of cases... Each case is
+       determined by the top constructor (Node or Contents) and the shape of the name and
+       address *)
     let value_t : value Irmin.Type.t =
       let open Irmin.Type in
       variant "Compress.value"
@@ -404,6 +501,8 @@ struct
           node_dd
         -> function
         | Contents (Indirect n, Indirect h, m) ->
+          (* this looks like it is trying to save space by avoiding writing default
+             metadata *)
             if is_default m then contents_ii (n, h) else contents_x_ii (n, h, m)
         | Node (Indirect n, Indirect h) -> node_ii (n, h)
         | Contents (Indirect n, Direct h, m) ->
@@ -459,9 +558,12 @@ struct
 
     type nonrec int = int [@@deriving irmin ~encode_bin ~decode_bin]
 
-    let no_length = 0
+    let no_length = 0  (* used once below *)
     let is_real_length length = not (length = 0)
 
+    (* a wrapper round a [v], that gets filled in with the length of the encoding of v;
+       FIXME why not make length an option? NOTE v1 is referred to as a tagged value?
+       later*)
     type v1 = { mutable length : int; v : v } [@@deriving irmin]
     (** [length] is the length of the binary encoding of [v]. It is not known
         right away. [length] is [no_length] when it isn't known. Calling
@@ -475,6 +577,8 @@ struct
       | V1_root of v1
       | V1_nonroot of v1
     [@@deriving irmin]
+    (* New stores work with V1? old stores with V0? type v1 is a wrapper... we treat these
+       differently and do something with the length? *)
 
     let encode_bin_tv_staggered ({ v; _ } as tv) kind f =
       (* We need to write [length] before [v], but we will know [length]
@@ -483,14 +587,17 @@ struct
       let l = ref [] in
       encode_bin_v v (fun s -> l := s :: !l);
       let length = List.fold_left (fun acc s -> acc + String.length s) 0 !l in
-      tv.length <- length;
+      tv.length <- length; (* do we ever use this again? yes, see next fun *)
       encode_bin_kind kind f;
       encode_bin_int length f;
       List.iter f (List.rev !l)
+    (* NOTE encoding format: |kind|length|data|; this uses encode_bin_v *)
 
     let encode_bin_tv tv f =
       match tv with
-      | V0_stable _ -> assert false
+      | V0_stable _ -> assert false 
+      (* NOTE we only encode V1 values from this point in time, so these two can be assert
+         false *)
       | V0_unstable _ -> assert false
       | V1_root { length; v } when is_real_length length ->
           encode_bin_kind Pack_value.Kind.Inode_v2_root f;
@@ -523,14 +630,23 @@ struct
           assert (is_real_length length);
           let v = decode_bin_v s off in
           V1_nonroot { length; v }
-      | Commit_v1 | Commit_v2 -> assert false
+      | Commit_v1 | Commit_v2 -> assert false 
+      (* FIXME why impossible? because we are only dealing with non-commit, non-contents
+         things here; contents and commits are dealt with separately *)
       | Contents -> assert false
+    (* NOTE from the kind, we can know if there is a length field or not; don't have to
+       jump through hoops (read progressively larger parts of the input) unless kind is
+       one of the V0s *)
+
 
     let size_of_tv =
       let of_value tv =
         match tv with
+        (* include a byte for tag? *)
         | V0_stable v | V0_unstable v -> 1 + dynamic_size_of_v v
         | (V1_root { length; _ } | V1_nonroot { length; _ })
+          (* why subtract hash size? because length always includes hash size, but we
+             don't want it for some reason? *)
           when is_real_length length ->
             length - H.hash_size
         | V1_root ({ v; _ } as tv) ->
@@ -554,12 +670,15 @@ struct
         | Commit_v1 | Commit_v2 | Contents -> assert false
       in
       Irmin.Type.Size.custom_dynamic ~of_value ~of_encoding ()
-
+        
+    (* f. overrides the defaults presumably *)
     let tagged_v_t =
       Irmin.Type.like ~bin:(encode_bin_tv, decode_bin_tv, size_of_tv) tagged_v_t
 
+    (* f. presumably adds a hash at front of encoding? *)
     type t = { hash : H.t; tv : tagged_v }
 
+    (* FIXME to construct, we need the hash upfront? *)
     let v ~root ~hash v =
       let length = no_length in
       let tv =
@@ -567,6 +686,8 @@ struct
       in
       { hash; tv }
 
+
+    (* FIXME ff. what is stable etc? *)
     (** The rule to determine the [is_root] property of a v0 [Value] is a bit
         convoluted, it relies on the fact that back then the following property
         was enforced: [Conf.stable_hash > Conf.entries].
@@ -601,7 +722,7 @@ struct
       |+ field "hash" H.t (fun t -> t.hash)
       |+ field "tagged_v" tagged_v_t (fun t -> t.tv)
       |> sealr
-  end
+  end (* Compress *)
 
   (** [Val_impl] defines the recursive structure of inodes.
 
@@ -620,9 +741,14 @@ struct
         unreachable because the pointer to the backend is missing. The inode is
         immutable.
 
+      FIXME when can the "pointer to the backend" be missing?
+      
+      FIXME if we marshal an inode to disk, is it self-contained?
+
+
       {4 Layout Instantiation}
 
-      The layout of an inode is determined from the module [Val], it depends on
+      The layout of an inode is determined from the module [Val] (see below), it depends on
       the way the inode was constructed:
 
       - When [Total], it originates from [Val.v] or [Val.empty].
@@ -650,6 +776,8 @@ struct
 
       As of Irmin 2.4 (February 2021), inode deserialisation using Repr happens
       in [irmin/slice.ml] and [irmin/sync_ext.ml], and maybe some other places.
+
+      FIXME what is slice.ml?
 
       At some point we might want to forbid such deserialisations and instead
       use something in the flavour of [Val.of_bin] to create [Partial] inodes.
@@ -1687,12 +1815,13 @@ struct
     end
   end
 
+  (* FIXME what is Raw? *)
   module Raw = struct
     type hash = H.t
     type key = Key.t
     type t = T.key Bin.t [@@deriving irmin]
 
-    let depth = Bin.depth
+    let depth = Bin.depth (* required by Private_check functor... and others? *)
 
     exception Invalid_depth of { expected : int; got : int; v : t }
 
@@ -1825,7 +1954,7 @@ struct
       Bin.v ~root ~hash:(lazy i.hash) v
 
     let decode_bin_length = decode_compress_length
-  end
+  end (* Raw *)
 
   type hash = T.hash
   type key = Key.t
