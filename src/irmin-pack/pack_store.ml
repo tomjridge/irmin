@@ -58,8 +58,23 @@ let selected_version = `V2
 
 module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
   Maker with type hash = K.t and type index := Index.t = struct
+  let _ = Printf.printf "%s: Maker called\n" __FILE__
   module IO_cache = IO.Cache
-  module IO = IO.Unix
+  module IO = struct
+    include IO.Unix
+
+    (* add some debugging, for experiments *)
+
+    let read t ~off buf =
+      Printf.printf "%s: read (off,len) = (%d,%d)\n" __FILE__ (Optint.Int63.to_int off) (Bytes.length buf);
+      read t ~off buf
+
+    [@@@warning "-32"] (* following isn't used *)
+    let read_buffer t ~off ~buf ~len = 
+      Printf.printf "%s: read (off,len) = (%d,%d)\n" __FILE__ (Optint.Int63.to_int off) len;
+      read_buffer t ~off ~buf ~len
+
+  end
   module Tbl = Table (K)
   module Dict = Pack_dict
 

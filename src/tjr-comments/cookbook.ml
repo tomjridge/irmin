@@ -428,14 +428,39 @@ org-insert-link
 module Repo = S.Repo
 
 let _ = 
+  Printf.printf "Using Repo.iter\n%!";
   repo >>= fun repo -> 
   commit >>= fun commit -> 
   S.Commit.key commit |> fun commit_key ->
   S.Repo.iter 
     ~min:[] ~max:[`Commit commit_key] 
-    ~commit:(fun _k -> Printf.printf "Commit\n"; Lwt.return ())
-    ~node:(fun _k -> Printf.printf "Node\n"; Lwt.return ())
-    ~contents:(fun _k -> Printf.printf "Contents\n"; Lwt.return ())
+    ~commit:(fun k -> 
+        begin
+          let k' = Pk.inspect k in
+          match k' with
+          | Indexed _ -> Printf.printf "Commit: got indexed key\n"
+          | Direct {hash=_;offset;length} -> 
+            Printf.printf "Commit: got direct key (off,len)=(%d,%d)\n" (Optint.Int63.to_int offset) length;
+        end;
+        Lwt.return ())
+    ~node:(fun k -> 
+        begin
+          let k' = Pk.inspect k in
+          match k' with
+          | Indexed _ -> Printf.printf "Node: got indexed key\n"
+          | Direct {hash=_;offset;length} -> 
+            Printf.printf "Node: got direct key (off,len)=(%d,%d)\n" (Optint.Int63.to_int offset) length;
+        end;
+        Lwt.return ())
+    ~contents:(fun k -> 
+        begin
+          let k' = Pk.inspect k in
+          match k' with
+          | Indexed _ -> Printf.printf "Contents: got indexed key\n"
+          | Direct {hash=_;offset;length} -> 
+            Printf.printf "Contents: got direct key (off,len)=(%d,%d)\n" (Optint.Int63.to_int offset) length;
+        end;
+        Lwt.return ())
     repo
 
 
