@@ -1,0 +1,14 @@
+(library
+ (name tjr_comments)
+ (libraries irmin-pack irmin-tezos)
+ (modules Comments)
+ (preprocess (pps ppx_irmin))
+ 
+)
+
+(executable
+  (name cookbook)
+  (modules Cookbook)
+ (preprocess (pps ppx_irmin))
+ (libraries irmin-pack irmin-tezos)
+)
