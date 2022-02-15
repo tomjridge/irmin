@@ -53,3 +53,5 @@ module IO = IO
 module Pack_key = Pack_key
 module Pack_value = Pack_value
 module Pack_store = Pack_store
+
+module Brute_force_integrity_report = Brute_force_integrity_report

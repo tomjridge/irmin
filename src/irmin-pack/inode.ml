@@ -28,7 +28,8 @@ module type Key' = sig
   include Irmin.Key.S 
   (* FIXME Irmin.Key.S seems to say each key can be converted into a hash... but is this
      true for Generic keys? Or is this saying that the inode internal implementation
-     requires a key that can be converted to a hash?  *)
+     requires a key that can be converted to a hash?  Perhaps later we see that the
+     encode/decode functions also take extra functions for the generic key case? *)
   (* FIXME what does this f. function do? what is the meaning of "unfindable_of_hash?" *)
   val unfindable_of_hash : hash -> t
 end
@@ -77,7 +78,10 @@ struct
 
     type step = Node.step
     [@@deriving irmin ~compare ~to_bin_string ~of_bin_string ~short_hash]
-    (* FIXME to_bin_string, of_bin_string used extensively later; what do they do? encode to a string? repr/src/repr/type_intf.ml has some doc saying it is basically as encode_bin, but without prefixing with length information... if t is string or bytes?
+    (* 
+FIXME to_bin_string, of_bin_string used extensively later; what do they do? encode to a
+string? repr/src/repr/type_intf.ml has some doc saying it is basically as encode_bin, but
+without prefixing with length information... if t is string or bytes?
 
 The type is a bit funny: 
 
@@ -339,8 +343,9 @@ every time.
       - with either [key]s or [hash]es as pointers to child values, when
         pre-computing the hash of a node with children that haven't yet been
         written to the store. *)
-  (* NOTE for marshaling, we want to use keys (ie the offsets contained in the structured
-     key) as pointers *)
+  (* NOTE for marshaling, we want to use offsets (ie the offsets contained in the
+     structured key) as pointers; this is achieved by passing extra functions to the
+     encode/decode routines *)
   module Bin = struct
     open T
 
@@ -352,7 +357,8 @@ every time.
        following; also used as Val_ref.t *)
 
     (* A tree node; has an explicit depth and length; has entries list - which presumably
-       is of the corresponding length *)
+       is of the corresponding length. FIXME how is this a recursive type? how do inodes
+       reference other inodes? *)
     type 'vref tree = {
       depth : int;
       length : int;
@@ -360,7 +366,8 @@ every time.
     }
     [@@deriving irmin]
 
-    (* FIXME what is this type? 'vref is used as Val_ref.t; this is the type of "Values" for this Bin module? *)
+    (* FIXME what is this type? 'vref is used as Val_ref.t; this is the type of "Values"
+       for this Bin module? *)
     type 'vref v = Values of (step * value) list | Tree of 'vref tree
     [@@deriving irmin ~pre_hash]
 
@@ -373,6 +380,13 @@ every time.
 
     (* FIXME ??? hash is a lazy hash; root is a boolean; v is [v] *)
     type 'vref t = { hash : H.t Lazy.t; root : bool; v : 'vref v }
+
+    (* NOTE later on, in {!Raw}, the type we read/write to/from disk is [T.key t]; thus,
+       from a value of type [t] we can get [t.v] and traverse a [Tree] or [Values]; the
+       tree looks like (essentially) a list of keys; the Values is a list of value, which
+       is a Node.value which is ... (node | contents) ... the other inodes in the tree?
+       Since a Node is represented via inodes, how does a Values(.. Node ...) get
+       marshalled? *)
 
     (* This is creating the repr 'a Irmin.Type.t value; given a vref I.T.t, we can form a
        vref t I.T.t *)
@@ -1816,10 +1830,15 @@ every time.
   end
 
   (* FIXME what is Raw? *)
+  (* NOTE Raw.t is the type that is actually read and written from disk; so to
+     encode/decode inodes from disk you need this module *)
   module Raw = struct
     type hash = H.t
     type key = Key.t
+
+    (* NOTE this is the type that gets sent to disk;  *)
     type t = T.key Bin.t [@@deriving irmin]
+
 
     let depth = Bin.depth (* required by Private_check functor... and others? *)
 
@@ -1859,9 +1878,11 @@ every time.
       Stats.incr_inode_encode_bin ();
       let step s : Compress.name =
         let str = step_to_bin s in
+        (* NOTE this optimization avoids putting names of length <= 3 in the dictionary *)
         if String.length str <= 3 then Direct s
         else match dict str with Some i -> Indirect i | None -> Direct s
       in
+      (* preprocess keys: write offset or hash *)
       let address_of_key key : Compress.address =
         match offset_of_key key with
         | Some off -> Compress.Indirect off
@@ -1870,11 +1891,14 @@ every time.
                 file. This is highly unusual but not forbidden. *)
             Compress.Direct (Key.to_hash key)
       in
+      (* preprocess before writing out *)
       let ptr : T.key Bin.with_index -> Compress.ptr =
        fun n ->
+         (* FIXME is this always a hash??? *)
         let hash = address_of_key n.vref in
         { index = n.index; hash }
       in
+      (* preprocess before writing out *)
       let value : T.step * T.value -> Compress.value = function
         | s, `Contents (c, m) ->
             let s = step s in
@@ -1886,12 +1910,14 @@ every time.
             Compress.Node (s, v)
       in
       (* List.map is fine here as the number of entries is small *)
+      (* preprocess before writing out *)
       let v : T.key Bin.v -> Compress.v = function
         | Values vs -> Values (List.map value vs)
         | Tree { depth; length; entries } ->
             let entries = List.map ptr entries in
             Tree { Compress.depth; length; entries }
       in
+      (* NOTE f. writes out (v t.v) *)
       let t = Compress.v ~root:t.root ~hash (v t.v) in
       encode_compress t
 
@@ -2352,7 +2378,7 @@ struct
           in
           Error msg
 
-  type x = key
+  (* type x = key *)
 end
 
 (* f. used for irmin-pack *)

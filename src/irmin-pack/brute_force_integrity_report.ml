@@ -1,16 +1,19 @@
+
+[@@@warning "-26"]
+[@@@warning "-27"]
+[@@@warning "-33"]
+
 (** This takes 200GB RAM and 90 (TODO) minutes for a 5GB pack file. *)
 open Irmin
 open! Import
 module IO = IO.Unix
-
-[@@@warning "-26"]
-[@@@warning "-27"]
 
 (* just a placeholder *)
 module type Version_S = sig
   val version : Version.t
 end
 
+(*
 (* Stuff we need to unmarshal disk contents; FIXME what about key type eg for
    Inode_internal? this presumably has to match what was used to serialize *)
 module type Args = sig
@@ -1244,3 +1247,4 @@ so, 'a = hash/key; 'b is just int (counting the number of entries
       Format.fprintf ppf "%a\n%!" Pass5.pp pass5;
       ()
 end (* Make *)
+*)
