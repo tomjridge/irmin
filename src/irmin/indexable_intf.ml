@@ -32,6 +32,14 @@ module type S_without_key_impl = sig
       backend might choose to discard that hash and/or can be corrupt if the
       hash is not consistent. *)
 
+  (* FIXME very unclear what the following guarantees; I would interpret it as: some
+     values are indexed; for these particular values, one may go from a hash to a key (and
+     then to the value itself); except that the doc says that "index t hash = Some key
+     doesn't guarantee that the value with that key is present"; perhaps this is so that
+     we can have the trivial implementation of index, where key = hash, and index just
+     returns the hash directly; but in this case, it doesn't seem that index provides
+     strong enough properties when the "subset of indexed values" is the desired
+     interpretation *)
   val index : [> read ] t -> hash -> key option Lwt.t
   (** Indexing maps the hash of a value to a corresponding key of that value in
       the store. For stores that are addressed by hashes directly, this is

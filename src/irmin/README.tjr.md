@@ -7,14 +7,22 @@ So, the obvious place to start is the main irmin.mli file
 Sequence of files to annotate (based on irmin.mli): 
 
 * irmin.mli
-* type.mli
-* info
-* merge
-* diff
-* perms
-* read_only
-* append_only
-* indexable
+* type.mli - ok; not actually exposed? Irmin.mli defines as module Type = Repr
+* info - ok
+* merge - complicated; skip on first reading FIXME come back if necessary
+* diff - defines a simple updated/added/remove type
+* perms - reflecting read/write perms as a phantom type [`Read | `Write]
+* import - ok (used by store_properties_intf)
+* conf (used by store_properties_intf) - confusing; a bit like cmdliner but for configs?;
+  perhaps not used much
+* store_properties_intf - various sigs to extend basic sig 'a t end; batch; closeable;
+  clearable; of_config
+* read_only - simple store with mem, find, close; Maker adds ability to create from a config
+* append_only - as read_only, but with add (k*v, returning unit), clear and batch; simple
+* indexable - as read_only, with hash, add (value -> key) (was unit in append_only);
+  requires each value is hashable to get the key; index function: hash -> key option, ;
+  doc for index is very unclear about what guarantees it provides; "best-effort"; seems to
+  imply that there is an index, to which a subset of values are added and indexed by hash
 * content_addressable
 * atomic_write
 * path

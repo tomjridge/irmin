@@ -51,6 +51,7 @@ module type S = sig
 
   (** {1 Info Functions} *)
 
+  (* FIXME following are a bit strange *)
   type f = unit -> t
   (** Alias for functions which can build commit info. *)
 
@@ -58,6 +59,8 @@ module type S = sig
   (** The empty info function. [none ()] is [empty] *)
 end
 
+(* Interface which is included in info.mli; this is a common naming convention (use of
+   [Sigs]) throughout intf files *)
 module type Sigs = sig
   module type S = S
 

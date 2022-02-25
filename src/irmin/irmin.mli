@@ -43,6 +43,7 @@ module Type = Repr
     type definitions via [\[@@deriving irmin\]] (see the
     {{:https://github.com/mirage/irmin/blob/main/README_PPX.md} documentation
     for [ppx_irmin]})*)
+(* NOTE this is not the same as the internal module Type, in [type.ml,type.mli] *)
 
 module Info = Info
 (** Commit info are used to keep track of the origin of write operations in the
