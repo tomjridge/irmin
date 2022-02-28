@@ -50,10 +50,17 @@ module type Sigs = sig
   module Unix : S
 
   module Cache : sig
+    (* presumably this is the type of the cache; it caches objects with the given
+       constructor type, and then when creating the object you instead use this cached
+       function; presumably the string is the key that is used for caching; this is rather
+       horrible *)
     type ('a, 'v) t = {
       v : 'a -> ?fresh:bool -> ?readonly:bool -> string -> 'v;
     }
-
+    
+    (* produce a cache; need to pass the constructor function; a function to "clear" a
+       given object (why?) and a function to test an object valid (why?) and finally a
+       function which takes a root and produces a string (???) *)
     val memoize :
       v:('a -> fresh:bool -> readonly:bool -> string -> 'v) ->
       clear:('v -> unit) ->

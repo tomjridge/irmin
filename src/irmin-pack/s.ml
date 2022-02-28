@@ -18,6 +18,8 @@ open! Import
 
 exception RO_not_allowed
 
+(** Contains a single [integrity_check] function, used for checking the integrity of
+    objects at a known offset, with known length and known hash. *)
 module type Checkable = sig
   type 'a t
   type hash

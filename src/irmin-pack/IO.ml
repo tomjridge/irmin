@@ -211,13 +211,19 @@ module Unix : S = struct
   let size { raw; _ } = (Raw.fstat raw).st_size
 end
 
+(* This module seems to implement caching based on the backing filename *)
 module Cache = struct
   type ('a, 'v) t = { v : 'a -> ?fresh:bool -> ?readonly:bool -> string -> 'v }
 
-  let memoize ~v ~clear ~valid file =
-    let files = Hashtbl.create 13 in
+  (* [file] is a function which takes a "root" string and returns the filename??? seems
+     complicated *)
+  let memoize ~v ~clear ~valid (file: root:string -> string) =
+    (* [files] keys on the filename and a bool, for "readonly" *)
+    let files : (string*bool,'a)Hashtbl.t = Hashtbl.create 13 in
+    (* the following is essentially the "cache" that is returned *)
     let cached_constructor extra_args ?(fresh = false) ?(readonly = false) root
         =
+        (* following is only place we use root; used to get a filename *)
       let file = file ~root in
       if fresh && readonly then invalid_arg "Read-only IO cannot be fresh";
       try
@@ -225,10 +231,14 @@ module Cache = struct
           [%log.debug
             "[%s] does not exist anymore, cleaning up the fd cache"
               (Filename.basename file)];
+          (* this tries to remove the instances if the filename doesn't exist anymore *)
           Hashtbl.remove files (file, true);
           Hashtbl.remove files (file, false);
+          (* then raise an exception that is caught later *)
           raise Not_found);
         let t = Hashtbl.find files (file, readonly) in
+        (* if we find something in the cache, then we check if it is "valid"; FIXME what
+           might this valid test be??? *)
         if valid t then (
           [%log.debug "found in cache: %s (readonly=%b)" file readonly];
           if fresh then clear t;

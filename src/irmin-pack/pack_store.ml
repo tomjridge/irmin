@@ -30,9 +30,11 @@ module Indexing_strategy = struct
   let default = always
 end
 
+(* refine some sigs from pack_store_intf *)
 module type S = S with type indexing_strategy := Indexing_strategy.t
 module type Maker = Maker with type indexing_strategy := Indexing_strategy.t
 
+(* Table will be used for caching; always indexed by hash *)
 module Table (K : Irmin.Hash.S) = Hashtbl.Make (struct
   type t = K.t
 
@@ -40,21 +42,26 @@ module Table (K : Irmin.Hash.S) = Hashtbl.Make (struct
   let equal = Irmin.Type.(unstage (equal K.t))
 end)
 
+(* Some exceptions, with formatting functions *)
 exception Invalid_read of string
 exception Corrupted_store of string
 
+(* NOTE these will raise exceptions when called *)
 let invalid_read fmt = Fmt.kstr (fun s -> raise (Invalid_read s)) fmt
 let corrupted_store fmt = Fmt.kstr (fun s -> raise (Corrupted_store s)) fmt
 
+(* This is used for encoding the length field in object headers *)
 module Varint = struct
   type t = int [@@deriving irmin ~decode_bin]
 
   (** LEB128 stores 7 bits per byte. An OCaml [int] has at most 63 bits.
       [63 / 7] equals [9]. *)
-  let max_encoded_size = 9
+  let max_encoded_size = 9  (* for a single int *)
 end
 
+(* default version? this is used later when opening without an explicit version *)
 let selected_version = `V2
+
 
 module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
   Maker with type hash = K.t and type index := Index.t = struct
@@ -75,7 +82,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       read_buffer t ~off ~buf ~len
 
   end
-  module Tbl = Table (K)
+  module Tbl = Table (K) (* unused? *)
   module Dict = Pack_dict
 
   module Hash = struct
@@ -89,6 +96,8 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
 
   type hash = K.t
 
+  (* following code will define further ['a t] types which wrap this and add extra
+     functionality *)
   type 'a t = {
     block : IO.t;
     index : Index.t;
@@ -97,6 +106,8 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     mutable open_instances : int;
   }
 
+  (* used for caching? but has a side-effect, so presumably relies on the caching code
+     only calling once? I don't understand what is going on here *)
   let valid t =
     if t.open_instances <> 0 then (
       t.open_instances <- t.open_instances + 1;
@@ -109,6 +120,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     let block =
       (* If the file already exists in V1, we will bump the generation header
          lazily when appending a V2 entry. *)
+      (* default to [selected_version] *)
       let version = Some selected_version in
       IO.v ~version ~fresh ~readonly file
     in
@@ -185,7 +197,11 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
         In practice this sharing permits multiple ro instances to share the same
         LRU. *)
     let roots = Hashtbl.create 10
+    (* FIXME the above seems to be related to the IO caching... but for some reason the
+       caching is just implemented directly here using this roots hashtbl *)
 
+    (* FIXME this seems to be copied from above, but not used for IO_cache as it was
+       above; *)
     let valid t =
       if t.open_instances <> 0 then (
         t.open_instances <- t.open_instances + 1;
@@ -590,4 +606,4 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     let integrity_check ~offset ~length k t =
       Inner.integrity_check ~offset ~length k (get_open_exn t)
   end
-end
+end (* Maker *)

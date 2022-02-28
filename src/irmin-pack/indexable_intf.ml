@@ -16,22 +16,29 @@
 
 open! Import
 
+(* NOTE there is also an indexable intf in irmin package *)
+
 module type S = sig
-  include Irmin.Indexable.S
+  include Irmin.Indexable.S 
 
   val add : 'a t -> value -> key Lwt.t
   (** Overwrite [add] to work with a read-only database handler. *)
+  (* FIXME how does this overriding work? also, why should it work with a read-only db
+     handler? *)
 
   val unsafe_add : 'a t -> hash -> value -> key Lwt.t
   (** Overwrite [unsafe_add] to work with a read-only database handler. *)
 
   val index_direct : _ t -> hash -> key option
+  (* FIXME what does "direct" mean here? *)
 
   val unsafe_append :
     ensure_unique:bool -> overcommit:bool -> 'a t -> hash -> value -> key
+  (* FIXME what is the meaning of the flags? what is "unsafe"? *)
 
   val unsafe_mem : 'a t -> key -> bool
   val unsafe_find : check_integrity:bool -> 'a t -> key -> value option
+  (* FIXME why do we need check_integrity? what is "unsafe"? *)
 end
 
 module type Maker = sig
