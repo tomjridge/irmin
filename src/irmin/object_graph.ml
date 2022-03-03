@@ -71,6 +71,8 @@ struct
 
     val create : int option -> t
     val add : t -> X.t -> int -> unit
+    (** add a binding (X.t,i), where X.t is the object type, and i is "level" in following
+        FIXME; but this API doesn't seem to expose level? so it is probably ignored *)
     val mem : t -> X.t -> bool
   end = struct
     module Lru = Lru.Make (X)
@@ -112,7 +114,9 @@ struct
         pp_vertices min pp_vertices max
         Fmt.(Dump.option int)
         cache_size];
+    (* marks are used ... to avoid revisiting? *)
     let marks = Table.create cache_size in
+    (* NOTE mark is for key and "level"? what is level? *)
     let mark key level = Table.add marks key level in
     let todo = Stack.create () in
     (* if a branch is in [min], add the commit it is pointing to too. *)
@@ -150,7 +154,9 @@ struct
         keys
     in
     let visit key level =
+      (* cut off if level >= depth *)
       if level >= depth then Lwt.return_unit
+      (* cut off if key already marked; level doesn't seem to be used *)
       else if has_mark key then Lwt.return_unit
       else
         skip key >>= function

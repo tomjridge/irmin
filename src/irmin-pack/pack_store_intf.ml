@@ -136,7 +136,7 @@ module type Sigs = sig
   module type S = S with type indexing_strategy := Indexing_strategy.t
   module type Maker = Maker with type indexing_strategy := Indexing_strategy.t
                                                              
-  module type X = Maker (*
+(* Maker has sig
 sig
   type hash
   type index

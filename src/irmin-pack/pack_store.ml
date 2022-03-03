@@ -55,8 +55,9 @@ module Varint = struct
   type t = int [@@deriving irmin ~decode_bin]
 
   (** LEB128 stores 7 bits per byte. An OCaml [int] has at most 63 bits.
-      [63 / 7] equals [9]. *)
+      [63 / 7] equals [9]. *) 
   let max_encoded_size = 9  (* for a single int *)
+  (* FIXME where does LEB128 come in? default irmin ~decode_bin format? *)
 end
 
 (* default version? this is used later when opening without an explicit version *)
@@ -82,7 +83,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       read_buffer t ~off ~buf ~len
 
   end
-  module Tbl = Table (K) (* unused? *)
+  (* module Tbl = Table (K) (\* unused? *\) *)
   module Dict = Pack_dict
 
   module Hash = struct
@@ -96,13 +97,13 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
 
   type hash = K.t
 
-  (* following code will define further ['a t] types which wrap this and add extra
-     functionality *)
+  (* This is essentially: block+index+dict. NOTE following code will define further ['a t]
+     types which wrap this and adds extra functionality *)
   type 'a t = {
     block : IO.t;
     index : Index.t;
     indexing_strategy : Indexing_strategy.t;
-    dict : Dict.t;
+    dict : Dict.t; (* needed when decoding entries; implements a sort of compression *)
     mutable open_instances : int;
   }
 
@@ -120,7 +121,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     let block =
       (* If the file already exists in V1, we will bump the generation header
          lazily when appending a V2 entry. *)
-      (* default to [selected_version] *)
+      (* NOTE default to [selected_version] *)
       let version = Some selected_version in
       IO.v ~version ~fresh ~readonly file
     in
@@ -134,13 +135,14 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
 
       In practice it permits 2 things:
 
-      - for the contents/node/commit stores to use the same files and
-      - for multiple ro instance to share the same [IO.t]. *)
+      - for the contents/node/commit stores to use the same files and (FIXME wouldn't it be better to do this explicitly, rather than introduce this caching which is impossible to opt out of?)
+      - for multiple ro instance to share the same [IO.t]. FIXME do we ever have multiple RO instances in the same process? *)
   let IO_cache.{ v = get_io } =
     IO_cache.memoize ~valid
       ~clear:(fun t -> IO.truncate t.block)
       ~v:(fun (index, indexing_strategy) -> unsafe_v ~index ~indexing_strategy)
       Layout.pack
+  (* NOTE this sort of code is extremely fragile *)
 
   let close t =
     t.open_instances <- t.open_instances - 1;
@@ -149,6 +151,8 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       IO.close t.block;
       Dict.close t.dict)
 
+  (* Later, this is wrapper in "Indexable.Closeable(_)" which presumably adds close
+     checks? FIXME what are these close checks? *)
   module Make_without_close_checks
       (Val : Pack_value.Persistent with type hash := K.t and type key := Key.t) =
   struct
@@ -156,11 +160,28 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     module Tbl = Table (K)
     module Lru = Irmin.Backend.Lru.Make (Hash)
 
+    (* another 'a t type, wrapping the earlier one; this type also is cached by path *)
     type nonrec 'a t = {
       pack : 'a t;
-      lru : Val.t Lru.t;
-      staging : Val.t Tbl.t;
-      mutable open_instances : int;
+      lru : Val.t Lru.t; 
+      (* for caching; this seems to grow without bound, until clear, clear_caches, or
+         close; except that the original pqwy code has been changed so that add will
+         remove the lru elt if the cap is reached; so this lru will be limited in size *)
+
+      staging : Val.t Tbl.t; 
+      (* for caching; difference between lru and staging? staging is last n, cleared
+         completely on flush; seems like some overlap in functionality here; do we need
+         both staging adn lru? *)
+
+(*
+in unsafe_find, staging is consulted first, then lru; staging can maybe disabled by
+setting auto_flush to 0, but this stalls trace replay for a long time initially;
+*)
+
+      mutable open_instances : int; 
+      (* note the pack field already has a mutable open_instances; what is the
+         relationship between these two fields? *)
+
       readonly : bool;
     }
 
@@ -168,6 +189,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     type key = Key.t [@@deriving irmin ~pp]
     type value = Val.t [@@deriving irmin ~pp]
 
+    (* use index to return a direct key, if the hash is indexed *)
     let index_direct t hash =
       [%log.debug "index %a" pp_hash hash];
       match Index.find t.pack.index hash with
@@ -175,9 +197,12 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       | Some (offset, length, _) ->
           Some (Pack_key.v_direct ~hash ~offset ~length)
 
+    (* NOTE this does not index something - it lifts index_direct to lwt; should be renamed? *)
     let index t hash = Lwt.return (index_direct t hash)
 
     let clear t =
+      (* FIXME why this strange check? NOTE that truncate is indeed called not only during
+         open? FIXME shouldn't this also clear the lru+staging? and dict? FIXME what is the semantics of clear? *)
       if IO.offset t.block <> Int63.zero then (
         Index.clear t.index;
         IO.truncate t.block)
@@ -201,13 +226,14 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
        caching is just implemented directly here using this roots hashtbl *)
 
     (* FIXME this seems to be copied from above, but not used for IO_cache as it was
-       above; *)
+       above; FIXME the side effect in a predicate is bad *)
     let valid t =
       if t.open_instances <> 0 then (
         t.open_instances <- t.open_instances + 1;
         true)
       else false
 
+    (* essentially, flush the components; maybe force an index merge; clear staging *)
     let flush ?(index = true) ?(index_merge = false) t =
       if index_merge then Index.merge t.pack.index;
       Dict.flush t.pack.dict;
@@ -215,6 +241,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       if index then Index.flush t.pack.index;
       Tbl.clear t.staging
 
+    (* create, without cache *)
     let unsafe_v_no_cache ~fresh ~readonly ~lru_size ~index ~indexing_strategy
         root =
       let pack = get_io (index, indexing_strategy) ~fresh ~readonly root in
@@ -222,6 +249,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       let lru = Lru.create lru_size in
       { staging; lru; pack; open_instances = 1; readonly }
 
+    (* create, including caching via roots *)
     let unsafe_v ?(fresh = false) ?(readonly = false) ?(lru_size = 10_000)
         ~index ~indexing_strategy root =
       try
@@ -241,12 +269,17 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
         Hashtbl.add roots (root, readonly) t;
         t
 
+    (* lift to lwt; "unsafe" is a bit weird; probably it just means "pre" or similar,
+       i.e. this is a preliminary version of the function, not the proper version; of
+       course, use of "unsafe" to mean "pre" is a FIXME because unsafe is such a trigger
+       word *)
     let v ?fresh ?readonly ?lru_size ~index ~indexing_strategy root =
       let t =
         unsafe_v ?fresh ?readonly ?lru_size ~index ~indexing_strategy root
       in
       Lwt.return t
 
+    (* read and recode just the hash *)
     let io_read_and_decode_hash ~off t =
       let buf = Bytes.create K.hash_size in
       let n = IO.read t.pack.block ~off buf in
@@ -268,7 +301,10 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
               assert false)
       | None ->
           corrupted_store "Unexpected object %a missing from index" pp_hash hash
+    (* NOTE this function should be used only when we are sure that the hash is indexed *)
 
+    (* probably a way to deal with entries of the form (hash,kind,...); the ... may have a
+       length header (in which case we can compute eg total entry length) or not *)
     module Entry_prefix = struct
       type t = {
         hash : hash;
@@ -293,6 +329,8 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
           t.size_of_value_and_length_header
     end
 
+    (* read at [off] and return Entry_prefix.t; NOTE (in relation to problems with layers)
+       this may well only read part of the full data for the entry *)
     let io_read_and_decode_entry_prefix ~off t =
       let buf = Bytes.create Entry_prefix.max_length in
       let bytes_read = IO.read t.pack.block ~off buf in
@@ -301,6 +339,10 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
          shorter than [Varint.max_encoded_size]. In this case, an invalid read
          may be discovered below when attempting to decode the length header. *)
       if bytes_read < Entry_prefix.min_length then
+        (* expect to read at least hash+kind; so don't use eg if just hash has been
+           written; FIXME what is the general mechanism for ensuring that RO instances
+           don't hit these problems? forcing them to only read upto
+           last_flushed_offset? *)
         invalid_read
           "Attempted to read an entry at offset %a in the pack file, but got \
            only %d bytes"
@@ -317,6 +359,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
                correctly): *)
             let pos_ref = ref length_header_start in
             let length_header =
+              (* NOTE the length header is encoded using Varint *)
               Varint.decode_bin (Bytes.unsafe_to_string buf) pos_ref
             in
             let length_header_length = !pos_ref - length_header_start in
@@ -327,10 +370,15 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     let pack_file_contains_key t k =
       let key = Pack_key.inspect k in
       match key with
-      | Indexed hash -> Index.mem t.pack.index hash
+      | Indexed hash -> 
+        (* FIXME is it possible for the key to be Indexed, but not in the index? if it is
+           in the index, is it guaranteed to be in the pack? is this an invariant? *)
+        Index.mem t.pack.index hash
       | Direct { offset; _ } ->
           let io_offset = IO.offset t.pack.block in
           let minimal_entry_length = Entry_prefix.min_length in
+          (* NOTE the following is rather hairy; it checks if the given offset is too
+             close to the end of the file... *)
           if
             Int63.compare
               (Int63.add offset (Int63.of_int minimal_entry_length))
@@ -341,6 +389,10 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
                isn't (yet) valid. If we're a read-only instance, the key may
                become valid on [sync]; otherwise we know that this key wasn't
                constructed for this store. *)
+            (* FIXME how can we get "keys not constructed for this store"? do we only
+               detect them when we fail to read the offset from disk? isn't this dangerous
+               if we try to read some arbitrary offset as a valid entry? see comment below
+               about forged keys *)
             if not t.readonly then
               invalid_read
                 "invalid key %a checked for membership (IO offset = %a)" pp_key
@@ -348,6 +400,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
             false)
           else
             (* Read the hash explicitly as an integrity check: *)
+            (* NOTE hashes always occur at the beginning of an entry *)
             let hash = io_read_and_decode_hash ~off:offset t in
             let expected_hash = Key.to_hash k in
             if not (Hash.equal hash expected_hash) then
@@ -361,22 +414,29 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
                entry (e.g. in the middle of a blob). *)
             true
 
+    (* check staging, lru then pack *)
+    (* NOTE "unsafe" here seems to mean "not in lwt" *)
     let unsafe_mem t k =
       [%log.debug "[pack] mem %a" pp_key k];
       Tbl.mem t.staging (Key.to_hash k)
       || Lru.mem t.lru (Key.to_hash k)
       || pack_file_contains_key t k
 
+    (* lift to lwt *)
     let mem t k =
       let b = unsafe_mem t k in
       Lwt.return b
 
-    let check_hash h v =
+    (* hash the value and compare to that given *)
+    let check_hash (h:hash) (v:value) =
       let h' = Val.hash v in
       if equal_hash h h' then Ok () else Error (h, h')
 
+    (* hash the value and compare to the hash in the key *)
     let check_key k v = check_hash (Key.to_hash k) v
 
+    (* NOTE throws invalid_read if we try to read too near the flushed end of the file? or
+       if not len bytes available; *)
     let io_read_and_decode ~off ~len t =
       let () =
         if not (IO.readonly t.pack.block) then
@@ -403,6 +463,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
         | Some length ->
             Pack_key.v_direct ~hash:entry_prefix.hash ~offset ~length
         | None ->
+          (* no explicit length; INVARIANT such entries MUST be stored in the index *)
             (* NOTE: we could store [offset] in this key, but since we know the
                entry doesn't have a length header we'll need to check the index
                when dereferencing this key anyway. {i Not} storing the offset
@@ -410,12 +471,18 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
                header during [find]. *)
             Pack_key.v_indexed entry_prefix.hash
       in
+      (* FIXME key_of_hash only works if the hash is indexed? how does decode_bin know to
+         call only on indexed entries? *)
       let key_of_hash = Pack_key.v_indexed in
       let dict = Dict.find t.pack.dict in
+      (* NOTE for decoding we use Dict.find; for encoding (later) we use Dict.index;
+         key_of_hash should only be called if the objcet is in the index? how does
+         decode_bin know this? *)
       Val.decode_bin ~key_of_offset ~key_of_hash ~dict
         (Bytes.unsafe_to_string buf)
         (ref 0)
 
+    (* for debugging *)
     let pp_io ppf t =
       let name = Filename.basename (Filename.dirname (IO.name t.pack.block)) in
       let mode = if t.readonly then ":RO" else "" in
@@ -484,7 +551,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
 
     let cast t = (t :> read_write t)
 
-    let integrity_check ~offset ~length hash t =
+    let integrity_check ~offset ~length (hash:hash) t =
       try
         let value = io_read_and_decode ~off:offset ~len:length t in
         match check_hash hash value with
@@ -492,13 +559,19 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
         | Error _ -> Error `Wrong_hash
       with Invalid_read _ -> Error `Absent_value
 
+    (* FIXME why called batch? seems to just cast a readonly to a read-write and then
+       run? *)
     let batch t f =
       let* r = f (cast t) in
+      (* FIXME following performs a flush if |staging|>0; why??? *)
       if Tbl.length t.staging = 0 then Lwt.return r
       else (
         flush t;
         Lwt.return r)
 
+    (* FIXME what is this? maybe the max size of t.staging before a flush is triggered and
+       things reset; setting this to a low number seems to stall eg trace replay for a
+       very long time as the store.dict grows in size *)
     let auto_flush = 1024
 
     let unsafe_append ~ensure_unique ~overcommit t hash v =
@@ -537,6 +610,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
           if should_index then
             Index.add ~overcommit t.pack.index hash (off, len, kind)
         in
+        (* call flush if |t.staging| >= auto_flush; this clears t.staging *)
         if Tbl.length t.staging >= auto_flush then flush t
         else Tbl.add t.staging hash v;
         Lru.add t.lru hash v;
@@ -546,6 +620,8 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       match ensure_unique with
       | false -> unguarded_append ()
       | true -> (
+          (* if ensure_unique is set, then if the hash is indexed, we return the
+             corresponding key; otherwise as before *)
           match index_direct t hash with
           | None -> unguarded_append ()
           | Some key -> key)
@@ -575,15 +651,20 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
       Tbl.clear t.staging;
       Lru.clear t.lru
 
+    (* FIXME this is presumably for a RO instance; if the new offset is strictly greater
+       than the former offset, then we reload the dict and index; if offset is less than
+       before (eg on clear?) what do we do???? how do RO instances deal with clear etc? *)
     let sync t =
       let former_offset = IO.offset t.pack.block in
+      (* FIXME force_offset? *)
       let offset = IO.force_offset t.pack.block in
       if offset > former_offset then (
         Dict.sync t.pack.dict;
         Index.sync t.pack.index)
 
+    (* FIXME clarify semantics of "offset" - it is "last flushed offset"? *)
     let offset t = IO.offset t.pack.block
-  end
+  end (* Make_without_close_checks *)
 
   module Make
       (Val : Pack_value.Persistent with type hash := K.t and type key := Key.t) =
@@ -603,7 +684,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) :
     let offset t = Inner.offset (get_open_exn t)
     let clear_caches t = Inner.clear_caches (get_open_exn t)
 
-    let integrity_check ~offset ~length k t =
+    let integrity_check ~offset ~length (k:hash) t =
       Inner.integrity_check ~offset ~length k (get_open_exn t)
   end
 end (* Maker *)
