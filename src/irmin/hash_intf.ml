@@ -66,7 +66,7 @@ module type Sigs = sig
 
   (** Digestif hashes. *)
   module Make (H : Digestif.S) : S with type t = H.t
-
+                                                   
   module Make_BLAKE2B (D : sig
     val digest_size : int
   end) : S

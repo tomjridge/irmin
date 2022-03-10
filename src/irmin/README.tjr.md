@@ -13,22 +13,66 @@ Sequence of files to annotate (based on irmin.mli):
 * diff - defines a simple updated/added/remove type
 * perms - reflecting read/write perms as a phantom type [`Read | `Write]
 * import - ok (used by store_properties_intf)
+
 * conf (used by store_properties_intf) - confusing; a bit like cmdliner but for configs?;
   perhaps not used much
-* store_properties_intf - various sigs to extend basic sig 'a t end; batch; closeable;
-  clearable; of_config
+
+* store_properties_intf - various sigs to extend basic sig 'a t end; **batch** - which
+  seems to convert a read only store into a read-write store, and performs some operations
+  on it... but doesn't seem to want to give many guarantees beyond that); **closeable**
+  (which states that close releases all resources... except it doesn't in `pack_store` and
+  elsewhere); **Of_config** which exposes a [v] function from conf to [read t] (why just
+  read?); **clearable** ("clear the store" - except that this operation is often not
+  implemented properly, or requires that it is called only when a store is opened etc);
+
 * read_only - simple store with mem, find, close; Maker adds ability to create from a config
+
 * append_only - as read_only, but with add (k*v, returning unit), clear and batch; simple
+
 * indexable - as read_only, with hash, add (value -> key) (was unit in append_only);
   requires each value is hashable to get the key; index function: hash -> key option, ;
   doc for index is very unclear about what guarantees it provides; "best-effort"; seems to
   imply that there is an index, to which a subset of values are added and indexed by hash
-* content_addressable
-* atomic_write
-* path
-* hash
-* metadata
-* contents
+
+* `content_addressable_intf` - S as `read_only.S`, add (with assumed conversion of value
+  to key), `unsafe_add` (allows to specify the key explicitly...with no guarantees if this
+  is somehow wrong); clearable, closeable, batch all included; Maker from Hash,Value;
+  Maker includes `Of_config`; Sigs reveals a Make functor, which takes an
+  `Append_only_maker`!; there is also a `Check_closed` module, which takes a Maker and
+  returns a Maker; this effectively wraps a F(K)(V) to give [ type 'a t = { closed : bool
+  ref; t : 'a S.t } ] and various functions are lifted from F with an explicit check that
+  the thing has not been closed; weird; why not just take the result sig from the Maker,
+  and wrap this? no idea; also, could use a mutable record rather than a bool ref field
+ 
+* `atomic_write_intf` - some k,v intf based on `Read_only.S`, but without the param'ed
+  type; set, `test_and_set`; remove; list; various "watch" functions which uses a "diff"
+  type; clearable; closeable; Maker with `Of_config`; Sigs include `Check_closed`
+  
+* path - a list of strings basically; t is the path type; step is the component ("short
+  name"); Sigs includes a string_list impl, which is probably the only impl actually used;
+  the impl of this has `of_string` ignore empty components, which seems
+  not-filesystem-like; sep is hardcoded as forward-slash
+  
+* hash - two main sigs, S and Typed; S hash the hash function: [val hash : ((string ->
+  unit) -> unit) -> t] which is a strange sig; basically you give hash not a list of
+  strings, but a function of type (string->unit)->unit, which is presumably a "sequence of
+  strings"; the type [type 'a iter = ('a -> unit) -> unit] is from digestif where it is
+  described as a "general iterator" which applies the function to a collection of
+  elements; so the idea is that the sequence is encoded in the funciton which takes the
+  [string ->unit] that you want to apply to each string, and then executes that against
+  all the strings; madness really; then the hash function will provide the [string ->
+  unit] part, and the iterator will call that for every string it knows about; this maybe
+  makes sense if we don't have sequences, and we want to hash some very large number of
+  strings that perhaps are generated; hashes are fixed size; the [Typed] sig has values
+  (rather than strings) and a more sensible hash function type.
+  
+  The final sigs includes various hash impls; for Make_BLAKE2B etc these allow to param by
+  `digest_size`
+
+* metadata_intf: a "defaultable" type which is a repr sig for a type with a default value;
+  merge for performing a 3way merge on metadata; there is a dummy "None" impl for metadata
+  
+* contents - 
 * branch
 * node
 * commit
@@ -43,7 +87,10 @@ Sequence of files to annotate (based on irmin.mli):
 
 * Generic_key
 * and maybe skip the stuff in irmin.mli from "Synchonization" onwards
-
+* lock - seems to be an Lwt_mutex thing; there is maybe confusion about when an Lwt thread
+  can be interrupted because there is a global lock that is locked before using a
+  particular named lock; actually this code looks very strange; unlock seems to think the
+  key might not be present (but it always is)
 
 
 

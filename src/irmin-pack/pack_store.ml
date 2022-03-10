@@ -226,7 +226,9 @@ setting auto_flush to 0, but this stalls trace replay for a long time initially;
        caching is just implemented directly here using this roots hashtbl *)
 
     (* FIXME this seems to be copied from above, but not used for IO_cache as it was
-       above; FIXME the side effect in a predicate is bad *)
+       above; FIXME the side effect in a predicate is bad; NOTE valid is not exposed in
+       intf, so presumably only used within this file, in a way that is obviously correct?
+       still, prefer to rename *)
     let valid t =
       if t.open_instances <> 0 then (
         t.open_instances <- t.open_instances + 1;
@@ -560,7 +562,7 @@ setting auto_flush to 0, but this stalls trace replay for a long time initially;
       with Invalid_read _ -> Error `Absent_value
 
     (* FIXME why called batch? seems to just cast a readonly to a read-write and then
-       run? *)
+       run? called from irmin.store *)
     let batch t f =
       let* r = f (cast t) in
       (* FIXME following performs a flush if |staging|>0; why??? *)

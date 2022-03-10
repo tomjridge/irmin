@@ -29,9 +29,11 @@ module type S = sig
       content-addressable store to generate a consistent key. *)
 
   val unsafe_add : [> write ] t -> key -> value -> unit Lwt.t
-  (** Same as {!add} but allows specifying the key directly. The backend might
-      choose to discard that key and/or can be corrupt if the key scheme is not
-      consistent. *)
+  (** Same as {!add} but allows specifying the key directly. The backend might choose to
+      discard that key and/or can be corrupt if the key scheme is not consistent. FIXME
+      this is quite loose; rather than discarding the key, shouldn't the backend at least
+      check? and if the backend accepts keys without checking them, and then goes wrong
+      when given a bad key, this is extremely dangerous *)
 
   include Clearable with type 'a t := 'a t
   (** @inline *)
