@@ -198,7 +198,9 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key)
 
         In practice this sharing permits multiple ro instances to share the same
         LRU. *)
-    let roots = Hashtbl.create 10
+    let roots : (string * bool * int, 'a t) Hashtbl.t = Hashtbl.create 10
+    (** NOTE Hashtbl key type is [string * bool * int] - string is "root"; bool is
+        "readonly"; int is "pid" *)
 
     let valid t =
       if t.open_instances <> 0 then (
@@ -236,13 +238,14 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key)
 
     let unsafe_v ?(fresh = false) ?(readonly = false) ?(lru_size = 10_000)
         ~index ~indexing_strategy root =
+      let pid = Unix.getpid () in
       try
-        let t = Hashtbl.find roots (root, readonly) in
+        let t = Hashtbl.find roots (root, readonly, pid) in
         if valid t then (
           if fresh then unsafe_clear t;
           t)
         else (
-          Hashtbl.remove roots (root, readonly);
+          Hashtbl.remove roots (root, readonly, pid);
           raise Not_found)
       with Not_found ->
         let t =
@@ -250,7 +253,7 @@ module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key)
             root
         in
         if fresh then unsafe_clear t;
-        Hashtbl.add roots (root, readonly) t;
+        Hashtbl.add roots (root, readonly, pid) t;
         t
 
     let v ?fresh ?readonly ?lru_size ~index ~indexing_strategy root =
