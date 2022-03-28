@@ -50,7 +50,30 @@ module Make (K : Irmin.Hash.S) = struct
   end
 
   module Stats = Index.Stats
-  module Index = Index_unix.Make (Key) (Val) (Index.Cache.Unbounded)
+
+  (** An instance cache that is additionally keyed by process ID, to ensure that the index
+      constructor is fork-safe (as is required by the asynchronous worker in the layered
+      store). See {{: https://github.com/mirage/index/pull/384}}. *)
+  module Unbounded_instance_cache : Index.Cache.S = struct
+    module Pid : sig
+      type t
+
+      val get : unit -> t
+    end = struct
+      type t = int
+
+      let get = Unix.getpid
+    end
+
+    type ('k, 'v) t = ('k * Pid.t, 'v) Hashtbl.t
+
+    let create () = Hashtbl.create 0
+    let add t k v = Hashtbl.add t (k, Pid.get ()) v
+    let find t k = Hashtbl.find_opt t (k, Pid.get ())
+    let remove t k = Hashtbl.remove t (k, Pid.get ())
+  end
+
+  module Index = Index_unix.Make (Key) (Val) (Unbounded_instance_cache)
   include Index
 
   (** Implicit caching of Index instances. TODO: Require the user to pass Pack
