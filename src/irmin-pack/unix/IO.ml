@@ -1,7 +1,6 @@
 open! Import
-include Irmin_pack.IO
 
-module Unix : S = struct
+module Unix : Irmin_pack.IO_intf.S = struct
   module Raw = Index_unix.Private.Raw
 
   type t = {

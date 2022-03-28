@@ -1,6 +1,6 @@
 open Import
 include Irmin_pack.Atomic_write
-module Cache = IO.Cache
+module Cache = IO_cache
 
 let current_version = `V1
 

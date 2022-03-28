@@ -25,9 +25,9 @@ end
 include Dict.Make (IO.Unix)
 
 (* Add IO caching around Dict.v *)
-let IO.Cache.{ v } =
+let IO_cache.{ v } =
   let v_no_cache ~fresh ~readonly = v ~fresh ~readonly in
-  IO.Cache.memoize ~clear:truncate ~valid
+  IO_cache.memoize ~clear:truncate ~valid
     ~v:(fun capacity -> v_no_cache ~capacity)
     Layout.dict
 

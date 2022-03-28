@@ -1,3 +1,2 @@
 open! Import
-include module type of Irmin_pack.IO
-module Unix : S
+module Unix : Irmin_pack.IO_intf.S

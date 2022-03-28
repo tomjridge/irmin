@@ -33,5 +33,5 @@ end
 module type Sigs = sig
   module type S = S
 
-  module Make (_ : IO.S) : S
+  module Make (_ : Irmin_pack.IO_intf.S) : S
 end

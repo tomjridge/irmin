@@ -44,19 +44,23 @@ module type S = sig
   val set_version : t -> Version.t -> unit
 end
 
+module type IO_cache = sig
+  type ('a, 'v) t = {
+    v : 'a -> ?fresh:bool -> ?readonly:bool -> string -> 'v;
+  }
+
+  val memoize :
+    v:('a -> fresh:bool -> readonly:bool -> string -> 'v) ->
+    clear:('v -> unit) ->
+    valid:('v -> bool) ->
+    (root:string -> string) ->
+    ('a, 'v) t
+end
+
+(*
 module type Sigs = sig
   module type S = S
 
-  module Cache : sig
-    type ('a, 'v) t = {
-      v : 'a -> ?fresh:bool -> ?readonly:bool -> string -> 'v;
-    }
-
-    val memoize :
-      v:('a -> fresh:bool -> readonly:bool -> string -> 'v) ->
-      clear:('v -> unit) ->
-      valid:('v -> bool) ->
-      (root:string -> string) ->
-      ('a, 'v) t
-  end
+  module Cache : IO_cache
 end
+*)

@@ -74,7 +74,7 @@ end)
 module Maker (Index : Pack_index.S) (K : Irmin.Hash.S with type t = Index.key) 
   (* : Irmin_pack.Pack_store_intf.Maker with type hash = K.t and type index := Index.t *)
   = struct
-  module IO_cache = IO.Cache
+  module IO_cache = IO_cache
   module IO = Pack_store_IO
   module Tbl = Table (K)
   module Dict = Pack_dict

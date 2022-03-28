@@ -19,7 +19,7 @@ include Dict_intf
 
 let version = `V1
 
-module Make (IO : IO.S) : S = struct
+module Make (IO : Irmin_pack.IO_intf.S) : S = struct
   type t = {
     capacity : int;
     cache : (string, int) Hashtbl.t;
