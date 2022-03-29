@@ -30,6 +30,8 @@ process then switches to use these next versions.
 
 (** {1 Globals *)
 
+let running_in_worker : bool ref = Worker.running_in_worker
+
 (** [running_create_reach_exe] is a [string option ref]; by default this is None;
     this should only be set to [Some fn] by the [create_reach.exe] executable.
 

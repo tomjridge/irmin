@@ -352,12 +352,22 @@ module Maker (Config : Conf.S) = struct
       (* NOTE the following function MUST ONLY be run in the worker process *)
       let create_reachable ~repo ~commit_hash_s = begin fun ~reachable_fn -> 
           let open struct
-            let _ = assert(Option.is_none !Irmin_pack_layers.running_create_reach_exe)
-            let _ = Irmin_pack_layers.running_create_reach_exe := Some reachable_fn
+            let _ = assert(!Irmin_pack_layers.running_in_worker = true)
+
+            let _ = 
+              assert(Option.is_none !Irmin_pack_layers.running_create_reach_exe);
+              Irmin_pack_layers.running_create_reach_exe := Some reachable_fn
+
+            (* we need to load another copy of repo, in order to avoid interacting with
+               fds from the parent process *)
+            let repo = 
+              let config = get_config repo in
+              Repo.v config
 
             let Ok hash = Irmin.Type.of_string (*S.*)hash_t commit_hash_s[@@warning "-8"]
 
             let commit = 
+              repo >>= fun repo -> 
               (*S.*)Commit.of_hash repo hash >>= function
               | Some c -> 
                 Printf.printf "Found commit %s\n" commit_hash_s;
@@ -366,6 +376,7 @@ module Maker (Config : Conf.S) = struct
             let finish_cb () = Lwt.return ()
 
             let iter = 
+              repo >>= fun repo -> 
               commit >>= fun commit -> 
               Printf.printf "Calling Repo.iter\n%!";
               (*S.*)Commit.key commit |> fun commit_key ->

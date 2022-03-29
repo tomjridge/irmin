@@ -40,6 +40,11 @@ module type S = sig
   val fork_worker: worker_args:worker_args -> [`Pid of int]
 end
 
+(** [running_in_worker] is a [bool ref]; by default this is false; it is set to
+    true immediately after the worker is forked; it can be used in assertions where the
+    assert MUST ONLY be reached when running in the worker process. *)
+let running_in_worker : bool ref = ref false
+
 (** Private implementation *)
 module Private = struct
 
@@ -120,6 +125,7 @@ module Private = struct
   end
 
   let run_worker ~worker_args = 
+    running_in_worker := true;
     mark 1;
     let {working_dir;src;create_reachable;sparse_dir;suffix_dir} = worker_args in
     let _ = 
@@ -163,7 +169,8 @@ module Private = struct
     Stdlib.flush_all ();
     let r = Unix.fork () in
     match r with 
-    | 0 -> (run_worker ~worker_args; Unix._exit 0)
+    | 0 -> (
+        run_worker ~worker_args; Unix._exit 0)
     | pid -> `Pid pid
 
   let _ = fork_worker
