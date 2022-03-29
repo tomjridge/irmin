@@ -337,7 +337,7 @@ module Maker (Config : Conf.S) = struct
     let traverse_pack_file = Traverse_pack_file.run
 
     (* following for layers *)
-    include struct
+    module Private_layers = struct
 
       let get_pack_store_io' : repo -> Pack_store_IO.t = fun repo -> 
         let contents : read X.Contents.t = repo.contents in
@@ -349,6 +349,68 @@ module Maker (Config : Conf.S) = struct
 
       let get_config (repo:repo) : Irmin.Backend.Conf.t = repo.config
 
+      (* NOTE the following function MUST ONLY be run in the worker process *)
+      let create_reachable ~repo ~commit_hash_s = begin fun ~reachable_fn -> 
+          let open struct
+            let _ = assert(Option.is_none !Irmin_pack_layers.running_create_reach_exe)
+            let _ = Irmin_pack_layers.running_create_reach_exe := Some reachable_fn
+
+            let Ok hash = Irmin.Type.of_string (*S.*)hash_t commit_hash_s[@@warning "-8"]
+
+            let commit = 
+              (*S.*)Commit.of_hash repo hash >>= function
+              | Some c -> 
+                Printf.printf "Found commit %s\n" commit_hash_s;
+                Lwt.return c[@@warning "-8"]
+
+            let finish_cb () = Lwt.return ()
+
+            let iter = 
+              commit >>= fun commit -> 
+              Printf.printf "Calling Repo.iter\n%!";
+              (*S.*)Commit.key commit |> fun commit_key ->
+              (* Repo.iter takes callbacks for each particular type of object; the
+                 callbacks typically take a key; we want to ensure that each particular
+                 object is at least read; so for each callback we use the key to pull the
+                 full object *)
+              let commit_cb = fun ck -> 
+                (*S.*)Commit.of_key repo ck >>= function
+                | None -> failwith (Printf.sprintf "%s: commit_cb" __FILE__)
+                | Some _commit -> finish_cb ()
+              in
+              let contents_cb = fun ck -> 
+                (*S.*)Contents.of_key repo ck >>= function
+                | None -> failwith (Printf.sprintf "%s: contents_cb" __FILE__)
+                | Some _contents -> finish_cb ()
+              in
+              let node_cb = fun nk -> 
+                (*S.*)Tree.of_key repo (`Node nk) >>= function
+                | None -> failwith (Printf.sprintf "%s: node_cb" __FILE__)
+                | Some _tree -> finish_cb()
+              in
+              (*S.*)Repo.iter
+                ~cache_size:0
+                ~min:[`Commit commit_key] ~max:[`Commit commit_key] 
+                ~edge:(fun _e1 _e2 -> Lwt.return ())
+                ~branch:(fun s -> ignore s; Lwt.return ())
+                ~commit:commit_cb
+                ~node:node_cb
+                ~contents:contents_cb
+                repo
+
+            let _ = Lwt_main.run iter
+
+            (* Pack store reads are logged to the output file; we don't have a handle on
+               the [out_channel], so we can't directly close the channel; likely the
+               channel is flushed and closed on termination anyway, but just to make sure,
+               we flush all out channels at this point, just before termination *)
+            let _ = Stdlib.flush_all ()
+          end
+          in
+          ()
+        end          
+      
+
       (* Why does the following piece of implementation belong here?
          Pack_store_IO.trigger_gc knows nothing about [type repo] etc; so in order to
          implement a function [: repo -> string -> unit] we need to be outside
@@ -359,20 +421,8 @@ module Maker (Config : Conf.S) = struct
         let args = Pack_store_IO.Trigger_gc.{
             commit_hash_s;
             create_reachable=(fun ~reachable_fn -> 
-                (* FIXME following needs to be replaced with something better *)
-                let exe = "/tmp/create_reach.exe" in
-                (* use config to get the path to the context *)
-                let path_to_ctxt = 
-                  let config = get_config repo in
-                  (* NOTE Conf is Irmin_pack.Conf *)
-                  Conf.root config 
-                in
-                let cmd = String.concat " " [exe; path_to_ctxt; commit_hash_s; reachable_fn] in
-                (* FIXME prev needs quoting? *)
-                let _ = Printf.printf "About to run command %S\n%!" cmd in    
-                let ret = Sys.command cmd in
-                let _ = assert(ret = 0) in
-                ())}
+                create_reachable ~repo ~commit_hash_s ~reachable_fn)
+          }
         in
         Pack_store_IO.trigger_gc io args;
         Pack_store.clear_all_caches ();
@@ -380,6 +430,9 @@ module Maker (Config : Conf.S) = struct
 
       let trigger_gc = Some trigger_gc'
     end
+
+    let get_config = Private_layers.get_config
+    let trigger_gc = Private_layers.trigger_gc
 
   end
 end
