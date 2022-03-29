@@ -33,3 +33,9 @@
  (modules Print_sparse_map)
  (libraries irmin-tezos irmin-pack.layers irmin-pack lwt)
 )
+
+(executable
+ (name "test_lwt_and_fork")
+ (modules Test_lwt_and_fork)
+ (libraries lwt lwt.unix)
+)
