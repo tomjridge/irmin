@@ -362,7 +362,8 @@ module Maker (Config : Conf.S) = struct
                fds from the parent process *)
             let repo = 
               let config = get_config repo in
-              Repo.v config
+              let root = Irmin_pack.Conf.root config in
+              Repo.v (Irmin_pack.config ~readonly:true root)
 
             let Ok hash = Irmin.Type.of_string (*S.*)hash_t commit_hash_s[@@warning "-8"]
 
