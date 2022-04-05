@@ -43,7 +43,7 @@ module Make (B : Backend.S) = struct
   module Backend = B
   module Info = B.Commit.Info
   module H = Commit.History (B.Commit)
-  module T = Tree.Make (B)
+  module T = Tree.Make (B) 
 
   module Contents = struct
     include B.Contents.Val
@@ -60,8 +60,12 @@ module Make (B : Backend.S) = struct
     let hash c = H.hash c
   end
 
+  (* mostly just T *)
   module Tree = struct
     include T
+
+
+    (* note these extra funcs use eg B.Node.index *) 
 
     let find_key r t =
       match key t with
@@ -77,6 +81,7 @@ module Make (B : Backend.S) = struct
               | None -> None
               | Some k -> Some (`Contents (k, m))))
 
+    (* just a rename, as shallow, kinded_hash etc *)
     let of_key r k = import r k
 
     let of_hash r = function

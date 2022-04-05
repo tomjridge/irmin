@@ -17,10 +17,11 @@
 open! Import
 include Inode_intf
 
+security issue; worried about a tree being too deep, since hash is ocaml hash
 exception Max_depth of int
 
 module Make_internal
-    (Conf : Conf.S)
+    (Conf : Conf.S) (* backend config *)
     (H : Irmin.Hash.S) (Key : sig
       include Irmin.Key.S with type hash = H.t
 
@@ -39,6 +40,7 @@ struct
     else if length <= Conf.stable_hash then true
     else false
 
+  (* add hashing to node *)
   module Node = struct
     include Node
     module H = Irmin.Hash.Typed (H) (Node)
@@ -49,6 +51,7 @@ struct
   (* Keep at most 50 bits of information. *)
   let max_depth = int_of_float (log (2. ** 50.) /. log (float Conf.entries))
 
+  (* just types and stuff *)
   module T = struct
     type hash = H.t [@@deriving irmin ~pp ~to_bin_string ~equal]
     type key = Key.t [@@deriving irmin ~pp ~equal]
@@ -78,6 +81,7 @@ struct
       | `Node k -> `Node (Key.to_hash k)
   end
 
+  (* just add hashing to step *)
   module Step =
     Irmin.Hash.Typed
       (H)
@@ -87,6 +91,7 @@ struct
         let t = T.step_t
       end)
 
+  
   module Child_ordering : Child_ordering with type step := T.step = struct
     open T
 
@@ -147,7 +152,7 @@ struct
         r0 + r1
 
     let short_hash = Irmin.Type.(unstage (short_hash bytes))
-    let seeded_hash ~depth k = abs (short_hash ~seed:depth k) mod Conf.entries
+    let seeded_hash ~depth k = abs (short_hash ~seed:depth k) mod Conf.entries (* uses ocaml hash *)
 
     let index =
       match Conf.inode_child_order with
@@ -166,6 +171,7 @@ struct
     let of_list l = List.fold_left (fun acc (k, v) -> add k v acc) empty l
   end
 
+  (* reference to an object; a child pointer; used in Bin tree; just a ref of key or hash *)
   module Val_ref : sig
     open T
 
@@ -246,7 +252,10 @@ struct
 
       - with either [key]s or [hash]es as pointers to child values, when
         pre-computing the hash of a node with children that haven't yet been
-        written to the store. *)
+        written to the store. 
+
+tree-like AST used to compute hashes of inodes; compress is actual repr in file; this is the version after loading from file; Val is the actual Node impl; Bin is used compute hashes
+*)
   module Bin = struct
     open T
 
@@ -255,6 +264,8 @@ struct
 
     type 'vref with_index = { index : int; vref : 'vref } [@@deriving irmin]
 
+    
+    (* see Compress.tree *)
     type 'vref tree = {
       depth : int;
       length : int;
@@ -296,7 +307,7 @@ struct
       | Tree t -> Some t.depth
   end
 
-  (* Compressed binary representation *)
+  (* Compressed binary representation; stored on disk; converted to a bin; bin is just uncompressed version of this;   *)
   module Compress = struct
     open T
 
@@ -313,6 +324,7 @@ struct
       |+ field "hash" address_t (fun t -> t.hash)
       |> sealr
 
+    (* see Bin.tree *)
     type tree = { depth : int; length : int; entries : ptr list }
 
     let tree_t : tree Irmin.Type.t =
@@ -719,7 +731,7 @@ struct
           type ptr.
           broken:(hash, key) cps ->
           save_dirty:(ptr t, key) cps ->
-          clear:bool ->
+          clear:bool -> (* unload the in-memory data as side effect of saving *)
           ptr layout ->
           ptr ->
           unit =
@@ -749,7 +761,7 @@ struct
                    TODO: refactor this case to be more precise. *)
                 save_dirty.f entry (fun key ->
                     if clear then box.target <- Lazy key)
-            | { target = Lazy _ } -> ())
+            | { target = Lazy _ } -> ()) (* nothing happens when key is lazy; lazy is known to be not modified, so don't need to save *)
         | Truncated -> (
             function
             (* TODO: this branch is currently untested: we never attempt to
@@ -761,7 +773,8 @@ struct
                 if not (Val_ref.is_key vref) then
                   broken.f (Val_ref.to_hash vref) (fun key ->
                       Val_ref.promote_exn vref key))
-
+          
+      (* *)
       let clear :
           type ptr.
           iter_dirty:(ptr layout -> ptr t -> unit) -> ptr layout -> ptr -> unit
@@ -2166,10 +2179,11 @@ struct
   end
 
   module Val = struct
-    include Val_portable
+    include Val_portable (* includes Node.t type *)
 
+    (* close to an empty impl of Node.Portable *)
     module Portable = struct
-      include Val_portable
+      include Val_portable (* Node.Portable.t same as Node.t *)
 
       type node_key = hash [@@deriving irmin]
       type contents_key = hash [@@deriving irmin]
@@ -2267,7 +2281,7 @@ struct
       and layout = I.Partial find in
       Partial (layout, I.of_snapshot layout t ~index)
   end
-end
+end (* Make_internal *)
 
 module Make
     (H : Irmin.Hash.S)

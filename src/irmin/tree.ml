@@ -220,19 +220,30 @@ module Make (P : Backend.S) = struct
   (* NOTE: given the choice, we prefer caching [Key] over [Hash] as it can
      be used to avoid storing duplicate contents values on export. *)
 
+  (* this lifts a backend Contents value to a lazily loaded frontend contents value *)
+  (* see "How does tree.ml differ from git tree?" which compares a basic concept of node in git to what we have here
+     - here, a node can be "not loaded" 
+     - here, we can have hashes of a subtree
+     - here, we cache the key (? what does this mean?)
+     - here, there is extra proof stuff eg info.env; env tracks which keys are loaded ("forced")
+
+ *)
   module Contents = struct
     type key = P.Contents.Key.t [@@deriving irmin]
-    type v = Key of repo * key | Value of contents | Pruned of hash
+    type v = 
+        Key of repo * key (* not loaded*) | Value of contents (* is loaded*) | Pruned of hash (* ptr to a contents that has a hash, but contents isn't known; only for Merkel tree *)
     type nonrec ptr_option = key ptr_option
 
+    (* this is the cache for v *)
     type info = {
-      mutable ptr : ptr_option;
+      mutable ptr : ptr_option; (* the cache of key/hash; can be upgraded? *)
       mutable value : contents option;
-      env : Env.t;
+      env : Env.t; (* proof stuff; IO operations on the key ?  *)
     }
 
     type t = { mutable v : v; info : info }
-
+(* NOTE we are dealing with a v and an info; *)
+(* quite often, info.ptr will be a hash, so we can avoid redundant comps *)
     let info_is_empty i = i.ptr = Ptr_none && i.value = None
 
     let v =
@@ -281,6 +292,7 @@ module Make (P : Backend.S) = struct
     let of_key repo k = of_v (Key (repo, k))
     let pruned h = of_v (Pruned h)
 
+    (* various different options depending on ... state and cache *)
     let cached_hash t =
       match (t.v, t.info.ptr) with
       | Key (_, k), _ -> Some (P.Contents.Key.to_hash k)
@@ -422,12 +434,22 @@ module Make (P : Backend.S) = struct
       env : Env.t;
     }
 
+
+(* Tree.t are nodes are different from backend nodes; tree.t nodes are abstract data structure; user-level construct, no bearing on backed repr; tree nodes can be purely in mem; OR they can have refs to backend objects; OR they can be actual backend objs OR they can be backend objs that have since been mutated and the updates stored in
+
+Backend Nodes are simply maps from step to children; children are keys ie objects that exist on disk; 
+
+User is always working with Tree.t; we want to add some functionality around backend objects eg backend only has objects, doesn't have tree AST; we mutate Tree.t objects and eventually the end version gets pushed to the backend
+
+ *)
+
     and v =
-      | Map of map
-      | Key of repo * key
-      | Value of repo * value * updatemap option
-      | Portable_dirty of portable * updatemap
+      | Map of map (* purely in memory thing;  *)
+      | Key of repo * key (* backend node yet to be loaded *)
+      | Value of repo * value * updatemap option (* almost a backend val with repo; also tracks mutations we make; updatemap is a buffer of mutations that user has made; per-step Add or Remove; eg find will first check updatemap;   *)
+      | Portable_dirty of portable * updatemap  (* portable are backend nodes in portable form; eg inode tree where child pointers are hashes; scenario: make an in-mem tree, convert to portable to calc hash; then we make some changes; portable objects are always in-mem;  *)
       | Pruned of hash
+(* key and pruned are as contents above; [Value] is just the node impl from backend, type P.Node.Val.t;  *)
 
     and t = { mutable v : v; info : info }
     (** [t.v] has 3 possible states:
@@ -640,7 +662,16 @@ module Make (P : Backend.S) = struct
 
     (** This [Scan] module contains function that scan the content of [t.v] and
         [t.info], looking for specific patterns. *)
+(* concentrate on the cascade function! *)
     module Scan = struct
+
+      (* the idea is that we have a value which can be in many
+         different forms (a big sum type); we want to eg get the hash
+         from this value; then we inspect the value and either call
+         the hit continuation with the desired result, or call the
+         miss continuation; miss_arg will typically contain "other
+         things that we might want to get, if we can't get the hash"
+         *)
       let iter_hash t hit miss miss_arg =
         match (t.v, t.info.ptr) with
         | Key (_, k), _ -> hit (P.Node.Key.to_hash k)
@@ -779,6 +810,9 @@ module Make (P : Backend.S) = struct
       let to_repo_value t miss miss_arg =
         iter_repo_value t (fun repo v -> Repo_value (repo, v)) miss miss_arg
 
+      (* the idea of cascade is that it takes a list of "view_kind"
+         which are ways of looking at the object eg "Hash" or "Value"
+         or... ; it returns the first one it can meet *)
       let rec cascade : type k. node -> k View_kind.t list -> k t =
        fun t -> function
         | [] ->

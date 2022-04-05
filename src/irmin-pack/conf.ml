@@ -20,8 +20,8 @@ type inode_child_order =
   [ `Seeded_hash | `Hash_bits | `Custom of depth:int -> bytes -> int ]
 
 module type S = sig
-  val entries : int
-  val stable_hash : int
+  val entries : int (* branching factor *)
+  val stable_hash : int (* root max branch? *)
   val contents_length_header : length_header
   val inode_child_order : inode_child_order
   val forbid_empty_dir_persistence : bool

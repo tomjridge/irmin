@@ -22,6 +22,7 @@ open struct
   module type Commit_portable = Commit.Portable.S
 end
 
+(* has Schema, also has almost everything that eg irmin-pack provides *)
 module type S = sig
   module Schema : Schema.S
 

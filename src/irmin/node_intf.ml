@@ -178,6 +178,7 @@ module type Portable = sig
       with type hash := hash
        and type contents_key = hash
        and type node_key = hash
+  (* NOTE this is a simplification of Core, where contents_key etc are hash *)
 
   type node
 

@@ -20,6 +20,7 @@ module type Child_ordering = sig
   type step
   type key
 
+  (* step is just a simple name; key is something that can be used in index following; idea is to compute "key" upfront then use repeatedly as we descend tree *)
   val key : step -> key
   val index : depth:int -> key -> int
 end
@@ -43,11 +44,12 @@ module type Snapshot = sig
 end
 
 module type Value = sig
-  type key
+  type key (* will be Pack_key *)
 
+  (* all the functions we expect of a node; NOTE introduces type t *)
   include
     Irmin.Node.Generic_key.S
-      with type node_key = key
+      with type node_key = key  (* pointer to children either node_key or contents_key *)
        and type contents_key = key
 
   val pred :
@@ -56,6 +58,11 @@ module type Value = sig
     * [ `Node of node_key | `Inode of node_key | `Contents of contents_key ])
     list
 
+  (* as Irmin.Node.Generic_key.S ... but Irmin.Node_intf.Portable has
+     already set contents_keys and node_key to hash, not keys.
+
+     once we have a t (from above Generic_key.S) , we can convert to a
+     Portable t, where all the child pointers are hashes; conversions happens via Portable.S of_node function *)
   module Portable :
     Irmin.Node.Portable.S
       with type node := t
@@ -81,6 +88,7 @@ module type Raw = sig
     'a list
 end
 
+(* main interface to inodes *)
 module type S = sig
   include Irmin.Indexable.S
   module Hash : Irmin.Hash.S with type t = hash
@@ -97,6 +105,7 @@ module type S = sig
   val save : ?allow_non_root:bool -> 'a t -> value -> key
 end
 
+(* as S, but using irmin-pack persistent backend *)
 module type Persistent = sig
   include S
 
