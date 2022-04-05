@@ -757,6 +757,7 @@ User is always working with Tree.t; we want to add some functionality around bac
 
           [cascade] may be used in order to build chains. *)
 
+      (* these are types that result from view_kinds below *)
       type _ t =
         | Hash : hash -> [> `hash ] t
         | Map : map -> [> `map ] t
@@ -770,6 +771,7 @@ User is always working with Tree.t; we want to add some functionality around bac
         | Any : [> `any ] t
 
       module View_kind = struct
+        (* these are what I put in the view list *)
         type _ t =
           | Hash : [> `hash ] t
           | Map : [> `map ] t
@@ -852,6 +854,7 @@ User is always working with Tree.t; we want to add some functionality around bac
 
        This is only possible if all of the child pointers have pre-existing
        keys, otherwise we must convert to portable nodes as a fallback. *)
+(* in practice, in irmin-pack P.Node.Val.t is same type Portable.t; but irmin sees as distinct types *)
     type hash_preimage = Node of P.Node.Val.t | Pnode of Portable.t
     type node_value = P.Node.Val.value
     type pnode_value = Portable.value
@@ -876,6 +879,7 @@ User is always working with Tree.t; we want to add some functionality around bac
       match
         (Scan.cascade t [ Hash; Value; Value_dirty; Portable_dirty; Map ]
           : [ `hash | `value | `value_dirty | `portable_dirty | `map ] Scan.t)
+         (* ty param ensures covers all cases, according to list provided; list that doesn't cover all views has to have an exhaustive case *)
       with
       | Hash h -> k h
       | Value v -> a_of_hashable P.Node.Val.hash_exn v
@@ -965,7 +969,7 @@ User is always working with Tree.t; we want to add some functionality around bac
                 let acc =
                   match (acc, e) with
                   | Node n, Node_value v -> Node (P.Node.Val.add n k v)
-                  | Node n, Pnode_value v ->
+                  | Node n, Pnode_value v -> (* give up on building node; build pnode instead (node is preferred over pnode *)
                       Pnode (Portable.add (Portable.of_node n) k v)
                   | Pnode n, Node_value v ->
                       Pnode (Portable.add n k (weaken_value v))
@@ -1051,6 +1055,7 @@ User is always working with Tree.t; we want to add some functionality around bac
             | Pnode x -> ok x)
       | Pruned h -> err_pruned_hash h |> return
 
+    (* here as lwt; later also direct *)
     let to_portable_value =
       to_portable_value_aux ~value_of_key ~return:Lwt.return ~bind:Lwt.bind
 
@@ -1141,9 +1146,14 @@ User is always working with Tree.t; we want to add some functionality around bac
                   match (cached_map x, cached_map y) with
                   | Some x, Some y -> map_equal x y
                   | _ -> equal_hash (hash ~cache:true x) (hash ~cache:true y))))
+        (* if one tree loaded, one not, but same hash, then considered equal *)
+
 
     (* same as [equal] but do not compare in-memory maps
        recursively. *)
+    (* for efficiency in various places; returns True | False | Maybe;
+       really want to return phys equal object if there has no change;
+       *)
     let maybe_equal (x : t) (y : t) =
       if x == y then True
       else
@@ -1335,9 +1345,9 @@ User is always working with Tree.t; we want to add some functionality around bac
 
     let fold :
         type acc.
-        order:[ `Sorted | `Undefined | `Random of Random.State.t ] ->
-        force:acc force ->
-        cache:bool ->
+        order:[ `Sorted | `Undefined | `Random of Random.State.t ] -> (* random is for testing *)
+        force:acc force -> (* for loading vals not yet loaded; normally true *)
+        cache:bool -> (* should update cache *)
         uniq:uniq ->
         pre:acc node_fn option ->
         post:acc node_fn option ->
@@ -1345,7 +1355,7 @@ User is always working with Tree.t; we want to add some functionality around bac
         ?depth:depth ->
         node:(Path.t -> _ -> acc -> acc Lwt.t) ->
         contents:(Path.t -> contents -> acc -> acc Lwt.t) ->
-        tree:(Path.t -> _ -> acc -> acc Lwt.t) ->
+        tree:(Path.t -> _ -> acc -> acc Lwt.t) -> (* trees are both nodes and contents *)
         t ->
         acc ->
         acc Lwt.t =
@@ -1386,6 +1396,7 @@ User is always working with Tree.t; we want to add some functionality around bac
                   let s = Array.to_seq arr in
                   (seq [@tailcall]) ~path acc d s k
               | `Sorted ->
+                (* tricky impl cases are when order is Sorted and we have to be careful eg to convert to map *)
                   let* m = to_map ~cache t >|= get_ok "fold" in
                   (map [@tailcall]) ~path acc d (Some m) k
               | `Undefined -> (
@@ -1855,7 +1866,21 @@ User is always working with Tree.t; we want to add some functionality around bac
     | `Node n -> n.Node.info.env
     | `Contents (c, _) -> c.Contents.info.env
 
-  let update_tree ~cache ~f_might_return_empty_node ~f root_tree path =
+
+  (* update, add, add_tree, remove, remove_tree implemented using this *)
+  (* f is update function; root_tree is top-level tree; path is path in root_tree to subtree that will be modified by f *)
+
+  (* goals: don't have empty subtrees; efficiently encode no-op
+     transforms when f doesn't change - eg remove path that doesn't
+     exist - want to preserver phys equality; be correct! used to be
+     multiple functions with similar code; now everything is an
+     instance of this function *)
+(* [cache:bool] - whether to update the cache in the info.x.y.z  - see .mli doc 
+
+[f_might_return_empty_node] - used to optimise prune_empty below; on return path from a node with a single child that has been pruned, we want to prune the parent and maybe the parent parent etc. 
+
+*)
+  let update_tree ~cache ~(f_might_return_empty_node:bool) ~f root_tree path =
     (* User-introduced empty nodes will be removed immediately if necessary. *)
     let prune_empty : node -> bool =
       if not f_might_return_empty_node then Fun.const false
