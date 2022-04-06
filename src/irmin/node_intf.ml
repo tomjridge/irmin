@@ -39,12 +39,14 @@ module type Core = sig
   [@@deriving irmin]
   (** The type for either (node) keys or (contents) keys combined with their
       metadata. *)
+(* NOTE node is a mapping from step "key"  to value *)
 
   type hash [@@deriving irmin]
-  (** The type of hashes of values. *)
+  (** The type of hashes of values. ?? value as above? so we take the hash of a `Node node_key *)
 
   val of_list : (step * value) list -> t
   (** [of_list l] is the node [n] such that [list n = l]. *)
+(* this seems to be the underlying structure (at least, iso to) *)
 
   val list :
     ?offset:int -> ?length:int -> ?cache:bool -> t -> (step * value) list
@@ -80,9 +82,10 @@ module type Core = sig
       [hash_exn t] is [hash_exn ~force:true t] which is not expected to raise an
       exception. [hash_exn ~force:false t] will raise [Not_found] if the hash
       requires IOs to be computed. *)
+(* computer the hash of a node; expected to be identical to [Hash.Typed(Hash)(Node).hash t]; force here means "do IO if required"; if force is false, an exn will be raised?? where is this actually implemented?? *)
 
   val clear : t -> unit
-  (** Cleanup internal caches. *)
+  (** Cleanup internal caches. ?? for a single node?? *)
 
   val find : ?cache:bool -> t -> step -> value option
   (** [find t s] is the value associated with [s] in [t].
@@ -91,6 +94,8 @@ module type Core = sig
       between the node and the contents is labeled by a {!step}.
 
       See {!caching} for an explanation of the [cache] parameter *)
+(* cache, by default true, means ... cache the resulting step->value option? *)
+
 
   val add : t -> step -> value -> t
   (** [add t s v] is the node where [find t v] is [Some s] but is similar to [t]
@@ -123,6 +128,9 @@ module type Core = sig
       "lower-level" nodes. Note: theses [effects] are not in the Lwt monad on
       purpose (so [Tree.hash] and [Tree.equal] are not in the Lwt monad as
       well). *)
+(* this is where inode notion of inode tree, and depth within it, appears?? *)
+
+(* ??don't understand this?? *)
 
   type effect := expected_depth:int -> node_key -> t option
   (** The type for read effects. *)
@@ -131,18 +139,22 @@ module type Core = sig
   (** [with_handler f] replace the current effect handler [h] by [f h]. [f h]
       will be called for all the recursive read effects that are required by
       recursive operations on nodes. .*)
+(* ?? don't understand ?? *)
 
   type head :=
     [ `Node of (step * value) list | `Inode of int * (int * hash) list ]
   [@@deriving irmin]
+(* ?? `Inode case is depth * (hash bits * hash) list ? *)
 
   val head : t -> head
   (** Reveal the shallow internal structure of the node.
 
       Only hashes and not keys are revealed in the [`Inode] case, this is
       because these inodes might not be keyed yet. *)
+(* so all impls of node support this operation? and an in-mem impl always returns `Node ?? *)
 end
 
+(* ?? generic key is the new structured key? *)
 module type S_generic_key = sig
   include Core
   (** @inline *)
@@ -154,8 +166,10 @@ module type S_generic_key = sig
     node:node_key option Merge.t ->
     t Merge.t
   (** [merge] is the merge function for nodes. *)
+(* ?? why is merge associated with generic key?? *)
 
   exception Dangling_hash of { context : string; hash : hash }
+(* ?? a dangling hash is one which cannot be found in the backend? ?? why is this defined in this intf? *)
 end
 
 module type S = sig
@@ -191,6 +205,7 @@ module type Portable = sig
     node:node_key option Merge.t ->
     t Merge.t
   (** [merge] is the merge function for nodes. *)
+(* ?? this is as the merge function in S_generic_key? but without the dangling_hash exeption from there *)
 
   (** {1 Proofs} *)
 
@@ -238,6 +253,7 @@ module type Maker_generic_key = functor
        and type metadata := metadata
        and type hash := hash
 end
+(* ?? the default maker has this sig? *)
 
 module type Store = sig
   include Indexable.S
@@ -259,6 +275,7 @@ module type Store = sig
        and type node_key = key
        and type metadata = Metadata.t
        and type step = Path.step
+(* ?? something like: the store is a store of values (nodes); so Val is the way to manipulate the values ?? *)
 
   module Hash : Hash.Typed with type t = hash and type value = value
 
@@ -266,6 +283,7 @@ module type Store = sig
   (** [Contents] is the underlying contents store. *)
 end
 
+(* ?? where is this implemented? uses ocaml-graph? *)
 module type Graph = sig
   (** {1 Node Graphs} *)
 
@@ -373,7 +391,9 @@ module type Sigs = sig
     module Make_v2 : Maker
     (** [Make_v2] provides a similar implementation as [Make] but the hash
         computation is compatible with versions older than irmin.3.0 *)
+(* ?? so which should be used? Make? *)
 
+    (* NOTE this is a NODE store *)
     module Store
         (C : Contents.Store)
         (S : Indexable.S)
@@ -386,7 +406,7 @@ module type Sigs = sig
         (M : Metadata.S with type t = V.metadata)
         (P : Path.S with type step = V.step) :
       Store
-        with type 'a t = 'a C.t * 'a S.t
+        with type 'a t = 'a C.t * 'a S.t (* ?? the result is 'a t is a pair of a contents store and a node store? *)
          and type key = S.key
          and type hash = S.hash
          and type value = S.value
@@ -406,6 +426,8 @@ module type Sigs = sig
 
     val import : N.t -> t
     val export : t -> N.t
+    (* ?? how does this work? we take a Generic_key.S and add two
+       additional functions? where is V2 serialization? *)
   end
 
   module Portable : sig
