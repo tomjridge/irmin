@@ -57,6 +57,7 @@ module type Portable = sig
   type commit
 
   val of_commit : commit -> t
+(* ?? how is this different from S.t? what does this intf do??? below it seems to be used with commit type eliminated *)
 end
 
 open struct
@@ -80,6 +81,7 @@ module type Maker_generic_key = sig
       Portable with type commit := t and type hash := H.t and module Info = Info
   end
 
+  (* ?? diff between Make and Make_v2? is this the hash thing in irmin <3.0? *)
   module Make_v2
       (H : Type.S)
       (N : Key.S with type hash = H.t)
@@ -119,6 +121,7 @@ module type Store = sig
 
   module Node : Node.Store with type key = Val.node_key
   (** [Node] is the underlying node store. *)
+(* ?? a commit store always has a node store? why do we need this in the sig here? *)
 
   val merge : [> read_write ] t -> info:Info.f -> key option Merge.t
   (** [merge] is the 3-way merge function for commit keys. *)
@@ -244,7 +247,7 @@ module type Sigs = sig
                 and type t = S.value
                 and module Info := I) :
       Store
-        with type 'a t = 'a N.t * 'a S.t
+        with type 'a t = 'a N.t * 'a S.t (* a pair of a node store and a commit store *)
          and type key = S.key
          and type value = S.value
          and module Info = I
@@ -254,7 +257,7 @@ module type Sigs = sig
     include Maker with module Info = Info.Default
   end
 
-  (** V1 serialisation. *)
+  (** V1 serialisation. *) (* ?? what is V1 serialisation ?? *)
   module V1 : sig
     module Info : Info.S with type t = Info.Default.t
     (** Serialisation format for V1 info. *)
