@@ -36,6 +36,16 @@ let Ok hash = Irmin.Type.of_string S.hash_t commit_hash_s[@@warning "-8"]
 let commit = 
   repo >>= fun repo -> 
   Printf.printf "Found repository at %s\n" context_path;
+
+(* nico: we want to split the sparse/suffix at the offset of the commit (rather than last extent); so we should find out the offset of the comit; 
+
+let key = S.Backend.Commit.index .. in
+but this key may not be promoted? so
+let _ = S.Backend.Commit.find key
+this key should now be promoted and we can inspect it to find the offset 
+
+*)
+
   S.Commit.of_hash repo hash >>= function
   | Some c -> 
     Printf.printf "Found commit %s\n" commit_hash_s;
