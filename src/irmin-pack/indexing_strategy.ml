@@ -1,3 +1,4 @@
+(* nico: make a separate PR to move this to its own module *)
 type t = value_length:int -> Pack_value.Kind.t -> bool
 
 let always ~value_length:_ _ = true

@@ -194,6 +194,8 @@ struct
     in
     let* repo = Store.Repo.v conf in
     let on_commit _ _ = Lwt.return_unit in
+(* nico: this is where we can hook in and trigger gc;  *)
+
     let on_end () = Lwt.return_unit in
     Lwt.return (repo, on_commit, on_end)
 

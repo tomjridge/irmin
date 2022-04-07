@@ -354,6 +354,7 @@ module Maker (Config : Conf.S) = struct
          implement a function [: repo -> string -> unit] we need to be outside
          Pack_store_IO; at least in this file, we have access to all the implementation
          parts that we could need. *)
+(* nico: FIXME we can just pass the path directly; get the exe to exec in layers rather than passing as this function *)
       let trigger_gc' (repo:repo) commit_hash_s =
         let io = get_pack_store_io' repo in
         let args = Pack_store_IO.Trigger_gc.{

@@ -125,6 +125,7 @@ struct
     in
     let min = Set.of_list min in
     let has_mark =
+      (* nico: should be the case that lru with size 0 works ok; so maybe just add a comment here *)
       (* For layers [create_reach.exe], we want to make sure we visit ALL objects
          reachable from a commit; for this reason, we pass [cache_size=0] to [Repo.iter];
          we then override the [has_mark] function to always return false in this case (we

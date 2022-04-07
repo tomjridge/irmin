@@ -25,6 +25,7 @@ open Lwt.Infix
 module S = Irmin_tezos.Store
 
 let config = Irmin_pack.config ~readonly:true context_path
+(* nico: just pass lru size 0 here, adn it should disable the lru caching *)
 
 let repo = 
   Printf.printf "Opening repo %s\n%!" context_path;
@@ -51,6 +52,9 @@ let iter =
      take a key; we want to ensure that each particular object is at least read; so for
      each callback we use the key to pull the full object *)
   let commit_cb = fun ck -> 
+
+(* nico: rather than logging at the pack store level, we can take the key and inspect it in the callbacks; inspect key gives you the state; direct gives off,len; Indirect : you can call of_key; then invariant: the ck will be promoted to direct; *)
+
     S.Commit.of_key repo ck >>= function
     | None -> failwith ""
     | Some _commit -> finish_cb ()

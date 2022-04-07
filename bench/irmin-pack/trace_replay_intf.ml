@@ -80,6 +80,13 @@ module type Store = sig
     root:string -> store_config -> (Repo.t * on_commit * on_end) Lwt.t
 
   val trigger_gc: (repo -> string -> unit) option
+
+(* nico: on_commit is introduced for triggering gc occasionally during layers 
+
+on_commit takes an idx which is the count of the commit, so in tree.ml, in create_repo we can add on_commit
+tr
+
+*)
 end
 
 module type Sigs = sig

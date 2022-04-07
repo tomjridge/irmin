@@ -18,6 +18,7 @@ module Schema = Schema
 module Conf : Irmin_pack.Conf.S
 
 module Store :
+  (* nico: replace with Irmin_pack.S - no need for extended sig *)
   sig
     include Irmin.Generic_key.S
       with type Schema.Hash.t = Schema.Hash.t

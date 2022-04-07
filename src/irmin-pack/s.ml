@@ -43,6 +43,8 @@ module type Layers = sig
   type commit_hash_s := string
 
   val trigger_gc: (repo -> commit_hash_s -> unit) only_for_irmin_pack
+  (* nico: change this to commit, not commit_hash_s *)
+
 end
 
 (** [Irmin-pack]-specific extensions to the [Store] module type. *)

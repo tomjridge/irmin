@@ -29,6 +29,7 @@ module Replay = Irmin_traces.Trace_replay.Make
       include Store
       (* Trace_replay wants trigger_gc as an option, but Irmin_tezos exposes it directly,
          so we add this shim *)
+(* nico: this should disappear when we use the proper signature *)
       let trigger_gc = Some trigger_gc 
     end)
 
