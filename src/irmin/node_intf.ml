@@ -197,6 +197,7 @@ module type Portable = sig
   type node
 
   val of_node : node -> t
+    (* seems a bit strange that the intf for a Portable node should depend on the node type *)
 
   (** {2 merging} *)
 

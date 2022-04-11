@@ -44,6 +44,9 @@ module type S = sig
   (** [empty ()] is the empty tree. The empty tree does not have associated
       backend configuration values, as they can perform in-memory operation,
       independently of any given backend. *)
+    
+  (* ?? associated backend configuration values?? what does this mean? *)
+
 
   val singleton : path -> ?metadata:metadata -> contents -> t
   (** [singleton k c] is the tree with a single binding mapping the key [k] to
@@ -64,6 +67,8 @@ module type S = sig
   type kinded_hash = [ `Contents of hash * metadata | `Node of hash ]
   [@@deriving irmin]
 
+  (* ?? why kinded_hash introduced? so we can have pruned as follows *)
+
   val pruned : kinded_hash -> t
   (** [pruned h] is a purely in-memory tree with the hash [h]. Such trees can be
       used as children of other in-memory tree nodes, for instance in order to
@@ -73,6 +78,7 @@ module type S = sig
       (e.g. calling {!find} on one of its children) will instead raise a
       {!Pruned_hash} exception. Attempting to export a tree containing pruned
       sub-trees to a repository will fail similarly. *)
+(* NOTE in-mem only? can't be persisted to disk? translates directly to Pruned constructor in tree.ml.Node.v *)
 
   val kind : t -> path -> [ `Contents | `Node ] option Lwt.t
   (** [kind t k] is the type of [s] in [t]. It could either be a tree node or
@@ -93,6 +99,8 @@ module type S = sig
   (** The exception raised by functions that can force lazy tree nodes but do
       not return an explicit {!or_error}. *)
 
+(* ?? dangling means not in backend store? *)
+
   exception Pruned_hash of { context : string; hash : hash }
   (** The exception raised by functions that attempts to load {!pruned} tree
       nodes. *)
@@ -100,6 +108,9 @@ module type S = sig
   exception Portable_value of { context : string }
   (** The exception raised by functions that attemps to perform IO on a portable
       tree. *)
+
+  (* ?? what does it mean "perform IO on a portable tree?" seems to be thrown in tree.ml l.2175 when calling on_node and encountering a portable_dirty *)
+
 
   type error =
     [ `Dangling_hash of hash | `Pruned_hash of hash | `Portable_value ]
@@ -199,6 +210,7 @@ module type S = sig
 
       If [k] refers to an internal node of [t], [f] is called with [None] to
       determine the value with which to replace it. *)
+(* ?? internal node? does it mean node as opposed to contents? *)
 
   val remove : t -> path -> t Lwt.t
   (** [remove t k] is the tree where [k] bindings has been removed but is
@@ -242,6 +254,10 @@ module type S = sig
   type marks
   (** The type for fold marks. *)
 
+  (* ?? what is a fold mark? [marks] is a set? of tree nodes; it
+     allows to store "visited" nodes, which can be used in incremental
+     folds; a mutable set of hashes *)
+
   val empty_marks : unit -> marks
   (** [empty_marks ()] is an empty collection of marks. *)
 
@@ -249,6 +265,11 @@ module type S = sig
   (** The type for {!fold}'s [force] parameter. [`True] forces the fold to read
       the objects of the lazy nodes and contents. [`False f] is applying [f] on
       every lazy node and content value instead. *)
+
+  (* ?? force means "read from disk"? how is the `False alternative
+     used? it gets given the path and the accumulated result of the
+     fold so far; typically it just returns the accumulated result
+     directly in lwt *)
 
   type uniq = [ `False | `True | `Marks of marks ]
   (** The type for {!fold}'s [uniq] parameters. [`False] folds over all the
@@ -258,6 +279,10 @@ module type S = sig
 
   type 'a node_fn = path -> step list -> 'a -> 'a Lwt.t
   (** The type for {!fold}'s [pre] and [post] parameters. *)
+
+  (* ?? what do these do? when the fold visits a non-leaf node, pre is
+     called before processing the node's children (?) and post is
+     called after? *)
 
   type depth = [ `Eq of int | `Le of int | `Lt of int | `Ge of int | `Gt of int ]
   [@@deriving irmin]
@@ -306,6 +331,8 @@ module type S = sig
       lexicographic order of their keys. If [`Random state], they are traversed
       in a random order. For large nodes, these two modes are memory-consuming,
       use [`Undefined] for a more memory efficient [fold]. *)
+
+  (* how exactly is depth used? see explanation of depth type above *)
 
   (** {1 Stats} *)
 
@@ -400,6 +427,7 @@ module type S = sig
     end
 
     val get_env : t -> Env.t
+    (* ?? every t has t.info.env? yes, for both nodes and contents *)
   end
 end
 
@@ -418,6 +446,8 @@ module type Sigs = sig
          and type contents = B.Contents.value
          and type contents_key = B.Contents.Key.t
          and type hash = B.Hash.t
+
+    (* ?? find where this is called (in ext?) *)
 
     type kinded_key =
       [ `Contents of B.Contents.Key.t * metadata | `Node of B.Node.Key.t ]

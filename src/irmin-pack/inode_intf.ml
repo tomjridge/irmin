@@ -43,6 +43,9 @@ module type Snapshot = sig
   type inode = { v : v; root : bool } [@@deriving irmin]
 end
 
+(* value here is presumably Node, given the include below (or maybe an
+   inode, if inode implements the same intf); so the inode maps a
+   pack_key to a node *)
 module type Value = sig
   type key (* will be Pack_key *)
 
@@ -52,6 +55,7 @@ module type Value = sig
       with type node_key = key  (* pointer to children either node_key or contents_key *)
        and type contents_key = key
 
+  (* predecessor of a Node is... ?? where defined? likely this is predecessor of an inode? *)
   val pred :
     t ->
     (step option
@@ -70,17 +74,18 @@ module type Value = sig
        and type step := step
        and type metadata := metadata
 
-  val nb_children : t -> int
+  val nb_children : t -> int (* no. of children of an inode?? yes *)
 end
 
+(* ?? a raw... pack value? *)
 module type Raw = sig
   include Pack_value.S
 
-  val depth : t -> int option
+  val depth : t -> int option (* ?? *)
 
-  exception Invalid_depth of { expected : int; got : int; v : t }
+  exception Invalid_depth of { expected : int; got : int; v : t } (* ?? *)
 
-  val decode_children_offsets :
+  val decode_children_offsets : (* ?? *)
     entry_of_offset:(int63 -> 'a) ->
     entry_of_hash:(hash -> 'a) ->
     string ->

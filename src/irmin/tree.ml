@@ -23,7 +23,7 @@ let src = Logs.Src.create "irmin.tree" ~doc:"Persistent lazy trees for Irmin"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 type fuzzy_bool = False | True | Maybe
-type ('a, 'r) cont = ('a -> 'r) -> 'r
+type ('a, 'r) cont = ('a -> 'r) -> 'r  (* ['a -> 'r] is the continuation expecting 'a and giving 'r; ('a,'r)cont takes the kont k and applies it to 'a *)
 type ('a, 'r) cont_lwt = ('a, 'r Lwt.t) cont
 
 let ok x = Lwt.return (Ok x)
@@ -48,6 +48,9 @@ let alist_iter2 compare_k f l1 l2 =
               (aux [@tailcall]) l1 t2))
   in
   aux l1 l2
+(* iterate over two lists of (k,v); sorted by k; process each (k,v) in
+   order, separately unless both lists contains an entry for k *)
+let _ = alist_iter2
 
 (* assume l1 and l2 are key-sorted *)
 let alist_iter2_lwt compare_k f l1 l2 =
@@ -450,6 +453,7 @@ User is always working with Tree.t; we want to add some functionality around bac
       | Portable_dirty of portable * updatemap  (* portable are backend nodes in portable form; eg inode tree where child pointers are hashes; scenario: make an in-mem tree, convert to portable to calc hash; then we make some changes; portable objects are always in-mem;  *)
       | Pruned of hash
 (* key and pruned are as contents above; [Value] is just the node impl from backend, type P.Node.Val.t;  *)
+(* ?? FIXME get Craig to go over these again *)
 
     and t = { mutable v : v; info : info }
     (** [t.v] has 3 possible states:

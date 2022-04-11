@@ -17,7 +17,7 @@
 open! Import
 include Inode_intf
 
-security issue; worried about a tree being too deep, since hash is ocaml hash
+(* security issue; worried about a tree being too deep, since hash is ocaml hash *)
 exception Max_depth of int
 
 module Make_internal
@@ -254,7 +254,7 @@ struct
         pre-computing the hash of a node with children that haven't yet been
         written to the store. 
 
-tree-like AST used to compute hashes of inodes; compress is actual repr in file; this is the version after loading from file; Val is the actual Node impl; Bin is used compute hashes
+tree-like AST used to compute hashes of inodes; compress is actual repr in file; this is the version after loading from file; Val is the actual Node impl; Bin is used compute hashes; Compress is just below
 *)
   module Bin = struct
     open T
@@ -540,7 +540,7 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
       |+ field "hash" H.t (fun t -> t.hash)
       |+ field "tagged_v" tagged_v_t (fun t -> t.tv)
       |> sealr
-  end
+  end (* Compress *)
 
   (** [Val_impl] defines the recursive structure of inodes.
 
@@ -558,6 +558,8 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
       - When [Truncated], chunks of the inode might be missing. Those chunks are
         unreachable because the pointer to the backend is missing. The inode is
         immutable.
+
+      ?? how do truncated inodes arise?? maybe from a proof; or ...?
 
       {4 Layout Instantiation}
 
@@ -590,8 +592,12 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
       As of Irmin 2.4 (February 2021), inode deserialisation using Repr happens
       in [irmin/slice.ml] and [irmin/sync_ext.ml], and maybe some other places.
 
+      ?? what is the meaning of the above comment? 
+
       At some point we might want to forbid such deserialisations and instead
       use something in the flavour of [Val.of_bin] to create [Partial] inodes.
+
+      ??
 
       {3 Topmost Inode Ancestor}
 
@@ -602,13 +608,19 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
       A [Val.t] points to the topmost [Val_impl.t] of an inode tree. In most
       scenarios, that topmost inode has [depth = 0], but it is also legal for
       the topmost inode to be an intermediate inode, i.e. with [depth > 0].
+      
+      ??
+
 
       The only way for an inode tree to have an intermediate inode as root is to
       fetch it from the backend by calling [Make_ext.find], using the hash of
       that inode.
+      
+      ??
+
 
       Write-only operations are not permitted when the root is an intermediate
-      inode. *)
+      inode. ?? *)
   module Val_impl = struct
     open T
 
@@ -646,6 +658,7 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
     and 'ptr tree = { depth : int; length : int; entries : 'ptr option array }
     and 'ptr v = Values of value StepMap.t | Tree of 'ptr tree
 
+    (* ?? how does all this work? *)
     and 'ptr t = {
       root : bool;
       v : 'ptr v;
@@ -1756,12 +1769,14 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
         | Inode_tree tr -> tree layout (of_inode_tree ~index layout tr)
       in
       if v.root then stabilize_root layout t else t
-  end
+  end (* Val_impl *)
 
   module Raw = struct
     type hash = H.t [@@deriving irmin]
     type key = Key.t
     type t = T.key Bin.t [@@deriving irmin]
+    (* NOTE a Raw.t is a T.key Bin.t ... *)
+
     type metadata = T.metadata [@@deriving irmin]
 
     let depth = Bin.depth
@@ -1958,7 +1973,7 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
           let vs = List.map to_entry vs in
           let v = Snapshot.Inode_value vs in
           { v; root = t.root }
-  end
+  end (* Raw *)
 
   module Snapshot = Val_impl.Snapshot
 
@@ -1971,8 +1986,9 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
 
   module Val_portable = struct
     include T
-    module I = Val_impl
+    module I = Val_impl (* basic inode values impl? *)
 
+    (* portable inode values?? *)
     type t =
       | Total of I.total_ptr I.t
       | Partial of I.partial_ptr I.layout * I.partial_ptr I.t
@@ -2002,6 +2018,7 @@ tree-like AST used to compute hashes of inodes; compress is actual repr in file;
           let v' = f.f I.Truncated v in
           if v == v' then t else Truncated v'
 
+    (* NOTE this is impl of pred from intf *)
     let pred t = apply t { f = (fun layout v -> I.pred layout v) }
 
     let of_seq l =
