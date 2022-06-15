@@ -61,6 +61,7 @@ module Maker (Config : Conf.S) = struct
         module CA = struct
           module Inter =
             Irmin_pack.Inode.Make_internal (Config) (H) (XKey) (Value)
+          (* [Inter.Val.t] [Inter.Val.pred] *)
 
           module Pack' =
             Pack_store.Make (File_manager) (Dict) (H) (Inter.Raw) (Errs)
@@ -124,6 +125,11 @@ module Maker (Config : Conf.S) = struct
 
       module Slice = Irmin.Backend.Slice.Make (Contents) (Node) (Commit)
       module Remote = Irmin.Backend.Remote.None (Commit.Key) (B)
+
+      module Gc =
+        Gc.Make (File_manager) (Dict) (Commit.Value) (Commit.CA)
+          (Node.CA.Inter.Val)
+          (Node.CA)
 
       module Repo = struct
         type t = {
@@ -192,9 +198,9 @@ module Maker (Config : Conf.S) = struct
             let capacity = 100_000 in
             Dict.v ~capacity fm
           in
-          let* contents = Contents.CA.v ~config ~fm ~dict in
-          let* node = Node.CA.v ~config ~fm ~dict in
-          let* commit = Commit.CA.v ~config ~fm ~dict in
+          let contents = Contents.CA.v ~config ~fm ~dict in
+          let node = Node.CA.v ~config ~fm ~dict in
+          let commit = Commit.CA.v ~config ~fm ~dict in
           let+ branch =
             let root = Conf.root config in
             let fresh = Conf.fresh config in
@@ -219,6 +225,26 @@ module Maker (Config : Conf.S) = struct
         let sync t =
           (* TODO: Rename [sync] to [reload] absolutly everywhere *)
           File_manager.reload t.fm |> Errs.raise_if_error
+
+        let gc ?(unlink = true) t commit_key =
+          let open Result_syntax in
+          let* generation = Gc.run t.config commit_key in
+          let* () = File_manager.swap t.fm ~generation ~unlink in
+
+          (* No need to purge dict here, as it is global to the store. *)
+          (* No need to purge index here. It is global too, but some hashes may
+             not point to valid offsets anymore. Pack_store will just say that
+             such keys are not member of the store. *)
+          Contents.CA.purge_lru t.contents;
+          Node.CA.purge_lru t.node;
+          Commit.CA.purge_lru t.commit;
+
+          Ok ()
+
+        let gc_exn ?unlink t commit_key =
+          match gc ?unlink t commit_key with
+          | Ok () -> ()
+          | Error _ -> (* TODO *) assert false
       end
     end
 
@@ -349,6 +375,7 @@ module Maker (Config : Conf.S) = struct
     let stats = Stats.run
     let sync = X.Repo.sync
     let flush = X.Repo.flush
+    let gc = X.Repo.gc_exn
 
     module Traverse_pack_file = Traverse_pack_file.Make (struct
       module Hash = H

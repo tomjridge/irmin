@@ -114,6 +114,18 @@ module type S = sig
       | `No_such_file_or_directory
       | `Not_a_directory of string ] )
     result
+
+  type swap_error :=
+    [ `Double_close
+    | `Io_misc of Control.Io.misc_error
+    | `No_such_file_or_directory
+    | `Not_a_file
+    | `Pending_flush
+    | `Ro_not_allowed
+    | `Write_on_closed ]
+
+  val swap :
+    t -> generation:int -> unlink:bool -> (unit, [> swap_error ]) result
 end
 
 module type Sigs = sig

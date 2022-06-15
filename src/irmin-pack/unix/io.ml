@@ -147,7 +147,8 @@ module Unix = struct
           Ok ()
         with Unix.Unix_error (e, s1, s2) -> Error (`Io_misc (e, s1, s2)))
 
-  let write_exn t ~off s : unit =
+  let write_exn t ~off ~len s : unit =
+    if String.length s < len then raise (Errors_base.Io_error `Invalid_argument);
     match (t.closed, t.readonly) with
     | true, _ -> raise (Errors_base.Io_error `Write_on_closed)
     | _, true -> raise Errors_base.RO_not_allowed
@@ -155,13 +156,13 @@ module Unix = struct
         (* really_write and following do not mutate the given buffer, so
            Bytes.unsafe_of_string is actually safe *)
         let buf = Bytes.unsafe_of_string s in
-        let len = Bytes.length buf in
         let () = Util.really_write t.fd off buf 0 len in
         Index.Stats.add_write len;
         ()
 
   let write_string t ~off s : (unit, [> write_error ]) result =
-    try Ok (write_exn t ~off s) with
+    let len = String.length s in
+    try Ok (write_exn t ~off ~len s) with
     | Errors_base.Io_error (`Write_on_closed as e) -> Error e
     | Errors_base.RO_not_allowed -> Error `Ro_not_allowed
     | Unix.Unix_error (e, s1, s2) -> Error (`Io_misc (e, s1, s2))

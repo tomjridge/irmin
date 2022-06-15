@@ -25,7 +25,7 @@ module Payload_v3 = struct
 
   type from_v3_gc_allowed = {
     entry_offset_suffix_start : int63;
-    gc_generation : int;
+    generation : int;
   }
   [@@deriving irmin]
   (** [entry_offset_suffix_start] is 0 if the suffix file was never garbage
@@ -33,7 +33,7 @@ module Payload_v3 = struct
       suffix file. Note that offsets in the suffix file are virtual. The garbage
       collections don't reset the offsets.
 
-      [gc_generation] is the number of past GCs. A suffix file and a prefix file
+      [generation] is the number of past GCs. A suffix file and a prefix file
       containing that integer in their name exist. *)
 
   (** [From_v1_v2_post_upgrade] corresponds to a pack store that was upgraded to

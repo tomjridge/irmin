@@ -78,7 +78,7 @@ struct
     let staging = Tbl.create 127 in
     let lru = Lru.create lru_size in
     Fm.register_suffix_consumer fm ~after_flush:(fun () -> Tbl.clear staging);
-    { lru; staging; indexing_strategy; fm; dict } |> Lwt.return
+    { lru; staging; indexing_strategy; fm; dict }
 
   let io_read_and_decode_hash ~off t =
     let buf = Bytes.create Hash.hash_size in
@@ -419,6 +419,8 @@ struct
 
       We could clear the caches here but that really is not necessary. *)
   let close _ = Lwt.return ()
+
+  let purge_lru t = Lru.clear t.lru
 end
 
 module Make
@@ -434,7 +436,7 @@ struct
   include Inner
   include Indexable.Closeable (Inner)
 
-  let v ~config ~fm ~dict = Inner.v ~config ~fm ~dict >|= make_closeable
+  let v ~config ~fm ~dict = Inner.v ~config ~fm ~dict |> make_closeable
   let cast t = Inner.cast (get_open_exn t) |> make_closeable
 
   let integrity_check ~offset ~length k t =
@@ -444,4 +446,5 @@ struct
 
   let read_and_decode_entry_prefix = Inner.read_and_decode_entry_prefix
   let index_direct_with_kind t = Inner.index_direct_with_kind (get_open_exn t)
+  let purge_lru t = Inner.purge_lru (get_open_exn t)
 end

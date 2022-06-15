@@ -165,6 +165,7 @@ module Maker (Config : Irmin_pack.Conf.S) = struct
         (* An in-memory store is always in sync. *)
         let sync _ = ()
         let flush _ = ()
+        let gc ?unlink _ _ = ignore unlink
       end
     end
 
@@ -193,6 +194,7 @@ module Maker (Config : Irmin_pack.Conf.S) = struct
 
     let sync = X.Repo.sync
     let flush = X.Repo.flush
+    let gc = X.Repo.gc
     let integrity_check ?ppf:_ ~auto_repair:_ _t = Ok `No_error
     let traverse_pack_file _ _ = ()
     let stats ~dump_blob_paths_to:_ ~commit:_ _ = Lwt.return_unit

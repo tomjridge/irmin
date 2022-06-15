@@ -79,6 +79,10 @@ module Make (Io : Io.S) = struct
 
   let readonly t = Io.readonly t.io
 
+  let auto_flush_threshold = function
+    | { rw_perm = None; _ } -> None
+    | { rw_perm = Some rw_perm; _ } -> Some rw_perm.auto_flush_threshold
+
   let end_offset t =
     match t.rw_perm with
     | None -> t.persisted_end_offset

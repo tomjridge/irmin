@@ -39,11 +39,12 @@ struct
   type t = {
     dict : Dict.t;
     control : Control.t;
-    suffix : Suffix.t;
+    mutable suffix : Suffix.t;
     index : Index.t;
-    use_fsync : bool;
     mutable dict_consumers : dict_consumer_data list;
     mutable suffix_consumers : suffix_consumer_data list;
+    use_fsync : bool;
+    root : string;
   }
 
   module Control = Control
@@ -166,7 +167,7 @@ struct
     let generation =
       match pl.status with
       | From_v1_v2_post_upgrade _ | From_v3_gc_disallowed -> 0
-      | From_v3_gc_allowed x -> x.gc_generation
+      | From_v3_gc_allowed x -> x.generation
     in
     (* 1. Create a ref for dependency injections for auto flushes *)
     let instance = ref None in
@@ -207,6 +208,7 @@ struct
         index;
         dict_consumers = [];
         suffix_consumers = [];
+        root;
       }
     in
     instance := Some t;
@@ -239,7 +241,7 @@ struct
       let open Payload in
       let status =
         From_v3_gc_allowed
-          { entry_offset_suffix_start = Int63.zero; gc_generation = 0 }
+          { entry_offset_suffix_start = Int63.zero; generation = 0 }
       in
       let pl =
         let z = Int63.zero in
@@ -392,7 +394,7 @@ struct
     let generation =
       match pl.status with
       | From_v1_v2_post_upgrade _ | From_v3_gc_disallowed -> 0
-      | From_v3_gc_allowed x -> x.gc_generation
+      | From_v3_gc_allowed x -> x.generation
     in
     (* 2. Open the other files *)
     let* suffix =
@@ -420,7 +422,10 @@ struct
         index;
         dict_consumers = [];
         suffix_consumers = [];
+        root;
       }
+
+  (* MISC. ****************************************************************** *)
 
   let version ~root =
     let v2_or_v1 () =
@@ -446,4 +451,42 @@ struct
         | Error `Not_a_file -> Error `Invalid_layout
         | Error `Read_on_closed -> assert false
         | Error (`Io_misc _ | `Corrupted_control_file) as e -> e)
+
+  let swap t ~generation ~unlink =
+    let open Result_syntax in
+    let* () =
+      let pl = Control.payload t.control in
+      let pl =
+        let open Payload in
+        (* The user should only be able to call [swap] when
+           [From_v3_gc_allowed]. *)
+        let status =
+          match pl.status with
+          | From_v1_v2_post_upgrade _ -> assert false
+          | From_v3_gc_disallowed -> assert false
+          | From_v3_gc_allowed x -> From_v3_gc_allowed { x with generation }
+        in
+        { pl with status }
+      in
+      Control.set_payload t.control pl
+    in
+    let* suffix =
+      let end_offset = Suffix.end_offset t.suffix in
+      let path = Irmin_pack.Layout.V3.suffix ~root:t.root ~generation in
+      let dead_header_size = 0 in
+      let auto_flush_threshold =
+        match Suffix.auto_flush_threshold t.suffix with
+        | Some x -> x
+        | None -> assert false
+      in
+      let cb () = dict_requires_a_flush_exn t in
+      Suffix.open_rw ~end_offset ~dead_header_size ~path ~auto_flush_threshold
+        ~auto_flush_callback:cb
+    in
+    t.suffix <- suffix;
+
+    let* () = Suffix.close t.suffix in
+    ignore unlink;
+    (* TODO: Unlink *)
+    Ok ()
 end
