@@ -18,6 +18,7 @@ open! Import
 
 let buffer_size = 8192
 
+(** Make functor; arguments are subsignatures of what is available in ext.ml *)
 module Make
     (Fm : File_manager.S)
     (Dict : Dict.S with type file_manager = Fm.t) (Commit_value : sig
@@ -61,9 +62,11 @@ module Make
      and type file_manager = Fm.t
      and type dict = Dict.t) =
 struct
+  (* abbrevs of some types coming from above eg in function pred *)
   type key = Commit_value.commit_key
   type kinded_key = [ `Commit of key | `Inode of key | `Contents of key ]
 
+  (* if we detect an error during gc, we want to abort early by throwing an exception *)
   type abort_error =
     [ `Node_or_contents_key_is_indexed of key | `Dangling_key of key ]
 
@@ -84,6 +87,8 @@ struct
                 iter_keys key node_store ~f)
           (Node_value.pred node)
 
+  (* iterate (visit) all the keys, starting from a given key (assumed to be a commit key),
+     applying the callback [f] to each key visited *)
   let iter_keys :
       Commit_store.key ->
       read Commit_store.t ->
@@ -101,6 +106,10 @@ struct
         f node_key;
         iter_keys node_key node_store ~f
 
+  (* initialize a file (the destination file for gc, to which will be copied the live
+     data) with a dummy character; after gc completes, the gaps will still contain the
+     dummy character, which will be used to detect errors when reading from the GC'ed
+     file *)
   let init_file ~io ~count =
     let open Result_syntax in
     let char = 'd' (* TODO *) in
@@ -123,6 +132,8 @@ struct
     in
     aux Int63.zero count
 
+  (* actually run the gc; config is used to get the root location on disk; [commit_key] is
+     the commit from which to start gc *)
   let run config commit_key =
     (* TODO: From ext. Make sure that no batch is ongoing. *)
     let open Result_syntax in
@@ -137,6 +148,7 @@ struct
         (* suffix_auto_flush_threshold *)
         root
     in
+    (* open the files; establish the [node_store] and [commit_store] *)
     let* fm = Fm.open_ro config in
     let dict =
       let capacity = 100_000 in
@@ -145,6 +157,7 @@ struct
     let node_store = Node_store.v ~config ~fm ~dict in
     let commit_store = Commit_store.v ~config ~fm ~dict in
 
+    (* get the payload from the filemanager, in order to get the new generation *)
     let pl : Control_file.Latest_payload.t =
       Fm.Control.payload (Fm.control fm)
     in
@@ -167,13 +180,16 @@ struct
           | None -> Error `Commit_key_is_indexed_and_dangling
           | Some (k, _kind) -> Ok k)
     in
-
+    
+    (* initialize the [dst_io] to be the same size as the current suffix *)
     let suffix_path = Irmin_pack.Layout.V3.suffix ~root ~generation in
     let suffix_size = pl.entry_offset_suffix_end in
     let* dst_io = Io.create ~path:suffix_path ~overwrite:false in
     let src_ao = Fm.suffix fm in
     let* () = init_file ~io:dst_io ~count:suffix_size in
 
+    (* call [iter_keys] with a callback that transfers the live data for the key from the
+       src to the dst *)
     let buffer = Bytes.create buffer_size in
     let rec transfer off len_remaining =
       let len = min buffer_size len_remaining in
@@ -202,5 +218,6 @@ struct
     let* () = Io.close dst_io in
     let* () = Fm.close fm in
 
+    (* finally, return the *new* generation *)
     Ok generation
 end
