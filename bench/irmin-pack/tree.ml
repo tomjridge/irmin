@@ -48,6 +48,9 @@ module type Store = sig
 
   val create_repo :
     root:string -> store_config -> (Repo.t * on_commit * on_end) Lwt.t
+
+  (* from Irmin_pack.S; also mirrored in trace_replay_intf.ml *)
+  val gc: ?unlink:bool -> repo -> commit_key -> unit
 end
 
 let pp_inode_config ppf (entries, stable_hash) =

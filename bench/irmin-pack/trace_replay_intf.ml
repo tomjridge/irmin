@@ -78,6 +78,9 @@ module type Store = sig
 
   val create_repo :
     root:string -> store_config -> (Repo.t * on_commit * on_end) Lwt.t
+
+  (* from Irmin_pack.S *)
+  val gc: ?unlink:bool -> repo -> commit_key -> unit
 end
 
 module type Sigs = sig
