@@ -152,16 +152,16 @@ struct
     (* open the index created by the fm. *)
     let index = File_manager.index fm in
     let dict = Dict.v ~capacity fm in
-    let+ pack = Pack.v ~config ~fm ~dict in
+    let pack = Pack.v ~config ~fm ~dict in
     (f := fun () -> File_manager.flush fm |> Errs.raise_if_error);
     { name; index; pack; dict; fm }
 
   let get_rw_pack () =
     let name = fresh_name "" in
-    create ~readonly:false ~fresh:true name
+    create ~readonly:false ~fresh:true name |> Lwt.return
 
-  let get_ro_pack name = create ~readonly:true ~fresh:false name
-  let reopen_rw name = create ~readonly:false ~fresh:false name
+  let get_ro_pack name = create ~readonly:true ~fresh:false name |> Lwt.return
+  let reopen_rw name = create ~readonly:false ~fresh:false name |> Lwt.return
 
   let close_pack t =
     Index.close_exn t.index;
