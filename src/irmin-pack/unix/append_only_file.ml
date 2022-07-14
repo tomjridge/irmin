@@ -30,6 +30,8 @@ module Make (Io : Io.S) = struct
   type t = {
     io : Io.t;
     mutable persisted_end_offset : int63;
+    (* NOTE the [persisted_end_offset] is "modulo" the [dead_header_size]: the real offset
+       in the file will be [persisted_end_offset+dead_header_size] *)
     dead_header_size : int63;
     rw_perm : rw_perm option;
   }
@@ -81,6 +83,12 @@ module Make (Io : Io.S) = struct
     | { rw_perm = None; _ } -> None
     | { rw_perm = Some rw_perm; _ } -> Some rw_perm.auto_flush_threshold
 
+  (* NOTE [end_offset] (rw-only function) includes *unwritten* bytes in the write buffer;
+     these bytes are *not* persisted on disk; however, [refresh_end_offset] takes a
+     [new_end_offset] that presumably must come from calling [end_offset]; for this to be
+     valid, we should call flush on the RW instance, then call end_offset, before calling
+     refresh_end_offset *)
+
   let end_offset t =
     match t.rw_perm with
     | None -> t.persisted_end_offset
@@ -103,6 +111,11 @@ module Make (Io : Io.S) = struct
         let open Int63.Syntax in
         let s = Buffer.contents rw_perm.buf in
         let off = t.persisted_end_offset + t.dead_header_size in
+        (* NOTE in this module, before *any* Io.{read,write}, the [dead_header_size] is
+           added to the offset; effectively this means that the initial bytes in the file
+           are ignored, and that we work with addresses that are "short by
+           dead_header_size"/ For example, the actual file size on disk after flush will
+           be longer (by [dead_header_size] bytes) compared to the [end_offset] *)
         let+ () = Io.write_string t.io ~off s in
         t.persisted_end_offset <-
           t.persisted_end_offset + (String.length s |> Int63.of_int);

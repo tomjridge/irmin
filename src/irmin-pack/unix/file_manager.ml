@@ -155,6 +155,10 @@ struct
         let pl =
           {
             pl with
+            (* NOTE we have called [Suffix.flush] above, so the suffix append buffer is
+               cleared and all bytes are on disk; so the [end_offset] is valid to give to
+               RO instances (via refresh_end_offset - which assumes the bytes are all on
+               disk) *)
             entry_offset_suffix_end = Suffix.end_offset t.suffix;
             status;
           }

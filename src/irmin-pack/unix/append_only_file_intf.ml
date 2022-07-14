@@ -92,7 +92,9 @@ module type S = sig
 
       {3 RW mode}
 
-      It also counts the bytes not flushed yet.
+      It also counts the bytes not flushed yet. However, it is then not valid to use the
+      result in a call to [refresh_end_offset] on an RO instance. TODO it is likely an
+      error to call this when the buffer is not empty.
 
       {3 RO mode}
 
@@ -145,6 +147,14 @@ module type S = sig
 
   val refresh_end_offset : t -> int63 -> (unit, [> `Rw_not_allowed ]) result
   (** Ingest the new end offset of the file.
+
+      {3 RO mode}
+
+      When calling [refresh_end_offset t off], the RO instance requires that the end
+      offset bytes are present on disk. So we cannot just call [end_offset] in the RW
+      instance and use this for [refresh_end_offset]; instead, we must first make sure the
+      RW instance buffer is empty (by calling flush), and then call [end_offset] to
+      retrieve the offset, which is then safe for RO instances.
 
       {3 RW mode}
 

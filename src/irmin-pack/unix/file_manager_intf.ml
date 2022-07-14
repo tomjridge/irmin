@@ -183,8 +183,8 @@ module type S = sig
     generation:int ->
     (int63, Errs.t) result ->
     (unit, [> write_gc_output_error ]) result
-  (** Used by the gc process at the end to write its output in
-      store.<generation>.out. *)
+  (** Used by the gc process at the end to write its output in store.<generation>.out. The
+      integer written is the "end offset" of the new suffix. *)
 
   type read_gc_output_error =
     [ `Corrupted_gc_result_file of string | `Gc_process_error of string ]
