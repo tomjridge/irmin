@@ -23,6 +23,9 @@ module Mapping_file = Irmin_pack_unix.Mapping_file.Make (Errs)
 let test_dir = Filename.concat "_build" "test-pack-mapping"
 let mapping_path = Irmin_pack.Layout.V3.mapping ~generation:0 ~root:test_dir
 
+(* The following routine writes the pairs to disk using Mapping_file.create; this has a
+   side effect that the pairs are processed to remove dups and combine adjacent entries
+   (subject to gap_tolerance); we then open the result file and return the pairs *)
 (** Call the [Mapping_file] routines to process [pairs] *)
 let process_on_disk pairs =
   let register_entries ~register_entry =
@@ -70,7 +73,11 @@ let process_in_mem pairs =
          | acc -> (off, len) :: acc)
        []
   |> List.rev
+(* NOTE the "merging of the contiguous ones" doesn't take gap tolerance into account *)
 
+(** [test input_entries] uses [process_on_disk] and [process_in_mem] to compute the result
+    of "mapping file construction", which includes sorting, combining adjacent regions
+    etc. The on-disk and in-mem results are compared to check they are equal. *)
 let test input_entries =
   let output_entries = process_on_disk input_entries in
   let input_entries' = process_in_mem input_entries in
@@ -78,6 +85,8 @@ let test input_entries =
     "Comparison between Mapping_file result and the in-memory equivalent"
     input_entries' output_entries
 
+(* FIXME why "suffix segmentation"? this produces an array of [(off0,len0),(off1,len1)...]
+   where off0=0, and off1=len0 etc. (ie the next off-len starts where the previous finishes) *)
 (** Produce an array of contiguous offset/length pairs starting from offset 0 *)
 let produce_suffix_segmentation len seed =
   let rng = Random.State.make [| seed |] in
@@ -91,16 +100,19 @@ let produce_suffix_segmentation len seed =
   in
   List.to_seq elts |> Array.of_seq
 
+(* Given a "suffix segmentation" as above, produce another array consisting of the entries
+   (not in order!) for some subset of array indices of the original; some entries may be
+   repeated (ie an index may be chosen multiple times); some lengths may be randomized *)
 (** Randomly produce a subset of the [full_seg] segmentation. *)
 let produce_suffix_segmentation_subset full_seg ~seed ~max_len =
   let rng = Random.State.make [| seed |] in
   let len = Random.State.int rng max_len |> max 1 |> min max_len in
   List.init len (fun _ ->
       let i = Random.State.int rng (Array.length full_seg) in
-      let off, len = full_seg.(i) in
-      if Random.State.bool rng then (off, len)
+      let off, len = full_seg.(i) in      
+      if Random.State.bool rng then (off, len) (* include directly *)
       else
-        let len = Random.State.int rng len |> max 1 in
+        let len = Random.State.int rng len |> max 1 in (* chose a random length *)
         (off, len))
 
 let test ~full_seg_length ~seg_subset_max_length ~random_test_count =
@@ -109,16 +121,19 @@ let test ~full_seg_length ~seg_subset_max_length ~random_test_count =
   Io.mkdir test_dir |> ignore;
 
   let seg = produce_suffix_segmentation full_seg_length 42 in
+  (* repeatedly run produce_suffix_segmentation_subset in a loop, and pass results to
+     [test] *)
   let rec aux i =
     if i >= random_test_count then ()
     else (
       produce_suffix_segmentation_subset seg ~seed:i
         ~max_len:seg_subset_max_length
-      |> test;
+      |> test; (* call the previous test function *)
       aux (i + 1))
   in
   aux 0;
   Lwt.return_unit
+(* FIXME why Lwt? *)
 
 let tests =
   [
