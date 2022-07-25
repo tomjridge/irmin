@@ -33,32 +33,133 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   let read_prefix = ref 0
   (*TODO move them in stats*)
 
+(*
   type mapping_value = { poff : int63; len : int }
   (** [poff] is a prefix offset (i.e. an offset in the prefix file), [len] is
       the length of the chunk starting at [poff]. *)
+*)
 
-  type mapping = mapping_value Intmap.t
+  type mapping = Mapping of int array array (* mapping_value Intmap.t *)
+  (** [mapping] is a 2-dimensional array (for efficiency.. we don't want to store pairs in
+      each array slot because this introduces extra memory overhead). The first coordinate
+      is the index. The second coordinate maps as follows:
+
+      - 0 is the virtual offset that we want to translate into an offset in the prefix
+      - 1 is the prefix offset
+      - 2 is the length
+  *)
+
+  module Mapping_util = struct
+          
+    type entry = { off:int63; poff:int63; len:int }
+    (** [entry] is a type for the return value from {!find_nearest_leq} *)
+
+    (** [nearest_leq ~arr ~get ~lo ~hi ~key] returns the nearest entry in the sorted [arr]
+        that is [<=] the given key. Routine is based on binary search. *)
+    let nearest_leq ~arr ~get ~lo ~hi ~key = 
+      assert(lo<=hi);
+      match get arr lo <= key with
+      | false -> 
+        (* trivial case: arr[lo] > key; so all arr entries greater than key, since arr is
+           sorted *)
+        `All_gt_key
+      | true -> 
+        (* NOTE arr[lo] <= key *)
+        (* trivial case: arr[hi] <= key; then within the range lo,hi the nearest leq entry
+           is at index hi *)
+        match get arr hi <= key with
+        | true -> `Some hi
+        | false -> 
+          (* NOTE key < arr[hi] *)
+          (lo,hi) |> iter_k (fun ~k:kont (lo,hi) -> 
+              (* loop invariants *)
+              assert(get arr lo <= key && key < get arr hi);
+              assert(lo < hi); (* follows from arr[lo] <= key < arr[hi] *)
+              match lo+1 = hi with 
+              | true -> `Some lo
+              | false -> 
+                (* NOTE at least one entry between arr[lo] and arr[hi] *)
+                assert(lo+2 <= hi);
+                let mid = (lo+hi)/2 in
+                let arr_mid = get arr mid in
+                match arr_mid <= key with 
+                | true -> kont (mid,hi)
+                | false -> 
+                  (* NOTE we can't call kont with mid-1 because we need the loop invariant
+                     (key < arr[hi]) to hold *)
+                  kont (lo,mid))
+
+    (* FIXME move to test directory *)
+    let _test_nearest_leq () = 
+      let arr = Array.of_list [1;3;5;7] in
+      let get arr i = arr.(i) in
+      let lo,hi = 0,Array.length arr -1 in
+      let nearest_leq_ key = nearest_leq ~arr ~get ~lo ~hi ~key in
+      assert(nearest_leq_ 0 = `All_gt_key); 
+      assert(nearest_leq_ 1 = `Some 0);
+      assert(nearest_leq_ 2 = `Some 0);
+      assert(nearest_leq_ 3 = `Some 1);
+      assert(nearest_leq_ 3 = `Some 1);
+      assert(nearest_leq_ 4 = `Some 1);
+      assert(nearest_leq_ 5 = `Some 2);
+      assert(nearest_leq_ 6 = `Some 2);
+      assert(nearest_leq_ 7 = `Some 3);
+      assert(nearest_leq_ 8 = `Some 3);
+      assert(nearest_leq_ 100 = `Some 3);
+      ()
+
+    (** [find_nearest_leq ~mapping off] returns the entry in [mapping] whose offset is the
+        nearest [<=] the given [off] *)
+    let find_nearest_leq ~(mapping:mapping) off =
+      match mapping with 
+      | Mapping arr -> 
+        match Array.length arr with
+        | 0 -> 
+          (* NOTE this is probably an error case; perhaps log an error *)
+          ignore(Stdlib.exit (-1));
+          None
+        | len -> 
+          let get arr i = arr.(i).(0) in
+          match nearest_leq ~arr ~get ~lo:0 ~hi:(len-1) ~key:(Int63.to_int off) with
+          | `All_gt_key -> None
+          | `Some i -> 
+            let off, poff, len = arr.(i).(0), arr.(i).(1), arr.(i).(2) in
+            Some { off=Int63.of_int off; poff=Int63.of_int poff; len }
+          
+  end
 
   type t = { fm : Fm.t; mutable mapping : mapping; root : string }
   (** [mapping] is a map from global offset to (offset,len) pairs in the prefix
       file *)
 
+  let empty_mapping = Mapping (Array.make_matrix 0 3 0)
+
   let load_mapping path =
-    let mapping = ref Intmap.empty in
-    let poff = ref Int63.zero in
-    let f ~off ~len =
-      mapping := Intmap.add off { poff = !poff; len } !mapping;
-      poff := Int63.(Syntax.(!poff + of_int len))
-    in
     let arr = Mapping_file.load_mapping_as_mmap path in
+    (* NOTE arr is an array of pairs (off,len); so the size needs to be adjusted by /2 in
+       the following line *)
+    let mapping = Array.make_matrix ((BigArr1.dim arr) / 2) 3 0 in
+    let poff = ref 0 in
+    let idx = ref 0 in
+    let f ~off ~len =
+      let off = Int63.to_int off in
+      (* We want to map off to poff,len *)
+      mapping.(!idx).(0) <- off;
+      mapping.(!idx).(1) <- !poff;
+      mapping.(!idx).(2) <- len;
+      poff := !poff + len;
+      incr idx;
+      ()
+    in
     Mapping_file.iter_mmap arr f;
-    Ok !mapping
+    Ok (Mapping mapping)
+
 
   let reload t =
     let open Result_syntax in
     let* mapping =
       match Fm.mapping t.fm with
-      | None -> Ok Intmap.empty
+      | None -> Ok empty_mapping (* presumably not used *)
       | Some path -> load_mapping path
     in
     t.mapping <- mapping;
@@ -66,7 +167,7 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
 
   let v ~root fm =
     let open Result_syntax in
-    let t = { fm; mapping = Intmap.empty; root } in
+    let t = { fm; mapping = empty_mapping; root } in
     Fm.register_mapping_consumer fm ~after_reload:(fun () -> reload t);
     let* () = reload t in
     Ok t
@@ -107,13 +208,11 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
      gced entry, or doing an invalid read. We expose two [read_exn] functions
      and we handled this upstream. *)
   let chunk_of_off_exn mapping off_start =
+    (* NOTE off_start is a virtual offset *)
     let open Int63 in
     let open Int63.Syntax in
-    match
-      Intmap.find_last_opt
-        (fun chunk_off_start -> chunk_off_start <= off_start)
-        mapping
-    with
+    let res = Mapping_util.find_nearest_leq ~mapping off_start in
+    match res with
     | None ->
         (* Case 1: The entry if before the very first chunk (or there are no
            chunks). Possibly the entry was gced. *)
@@ -122,9 +221,10 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
             Int63.pp off_start
         in
         raise (Errors.Pack_error (`Invalid_read_of_gced_object s))
-    | Some (chunk_off_start, chunk) ->
+    | Some (entry: Mapping_util.entry) ->
+      let chunk_off_start = entry.off in
         assert (chunk_off_start <= off_start);
-        let chunk_len = chunk.len in
+        let chunk_len = entry.len in
         let chunk_off_end = chunk_off_start + of_int chunk_len in
 
         (* Case 2: The entry starts after the chunk. Possibly the entry was
@@ -134,15 +234,15 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
            Fmt.str
              "offset %a is supposed to be contained in chunk \
               (off=%a,poff=%a,len=%d) but starts after chunk"
-             Int63.pp off_start Int63.pp chunk_off_start Int63.pp chunk.poff
-             chunk.len
+             Int63.pp off_start Int63.pp chunk_off_start Int63.pp entry.poff
+             entry.len
          in
          raise (Errors.Pack_error (`Invalid_read_of_gced_object s)));
 
         let shift_in_chunk = off_start - chunk_off_start in
         let max_entry_len = of_int chunk_len - shift_in_chunk in
 
-        (chunk, shift_in_chunk, max_entry_len)
+        (entry, shift_in_chunk, max_entry_len)
 
   (* After we find the chunk of an entry, we check that a read is possible in the
      chunk. If it's not, this is always an invalid read. *)
