@@ -31,15 +31,14 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) : sig
 
       Returns an error if the platform is not 64bits.
 
-      Works on both little-endian and big-endian platforms.
-
       Creates temporary files in [root] that are unlinked before the function
       returns. *)
 
   val load_mapping_as_mmap : string -> int_bigarray
-  (** [load_mapping_as_mmap path] returns an mmap-backed [int_bigarray];
-      assuming the path is for a mapping file previously created via [create],
-      the array should hold pairs of [(off,len)] data *)
+  (** [load_mapping_as_mmap path] returns an mmap-backed [int_bigarray]; assuming the path
+      is for a mapping file previously created via [create], the array should hold triples
+      of [(off,poff,len)] data, where [off] is a virtual offset, [poff] is an offset in
+      the prefix file for a live region of data, and [len] is the length of the region *)
 
   val iter_mmap : int_bigarray -> (off:int63 -> len:int -> unit) -> unit
   (** [iter_mmap arr f] calls [f] on each [(off,len)] pair in [arr], starting

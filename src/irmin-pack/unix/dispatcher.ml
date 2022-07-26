@@ -33,133 +33,127 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   let read_prefix = ref 0
   (*TODO move them in stats*)
 
-(*
-  type mapping_value = { poff : int63; len : int }
-  (** [poff] is a prefix offset (i.e. an offset in the prefix file), [len] is
-      the length of the chunk starting at [poff]. *)
-*)
-
-  type mapping = Mapping of int array array (* mapping_value Intmap.t *)
-  (** [mapping] is a 2-dimensional array (for efficiency.. we don't want to store pairs in
-      each array slot because this introduces extra memory overhead). The first coordinate
-      is the index. The second coordinate maps as follows:
-
-      - 0 is the virtual offset that we want to translate into an offset in the prefix
-      - 1 is the prefix offset
-      - 2 is the length
-  *)
+  type mapping =
+    | Mapping of int_bigarray
+        (** NOTE invariant-mapping-array: The [int_bigarray] holds ints; each consecutive
+            group of 3 ints corresponds to a tuple [(off,poff,len)], where [off] is the
+            virtual offset; [poff] is the offset in the prefix file; and [len] is the
+            length of the corresponding chunk in the prefix file. The size of the array is
+            always a multiple of 3. *)
 
   module Mapping_util = struct
-          
-    type entry = { off:int63; poff:int63; len:int }
-    (** [entry] is a type for the return value from {!find_nearest_leq} *)
+    type entry = { off : int63; poff : int63; len : int }
+    (** [entry] is a type for the return value from {!find_nearest_leq}; see doc for
+        {!type:mapping} above. *)
 
-    (** [nearest_leq ~arr ~get ~lo ~hi ~key] returns the nearest entry in the sorted [arr]
-        that is [<=] the given key. Routine is based on binary search. *)
-    let nearest_leq ~arr ~get ~lo ~hi ~key = 
-      assert(lo<=hi);
+    (** [nearest_leq ~arr ~get ~lo ~hi ~key] returns the nearest entry in the
+        sorted [arr] that is [<=] the given key. Routine is based on binary
+        search. *)
+    let nearest_leq ~arr ~get ~lo ~hi ~key =
+      assert (lo <= hi);
       match get arr lo <= key with
-      | false -> 
-        (* trivial case: arr[lo] > key; so all arr entries greater than key, since arr is
-           sorted *)
-        `All_gt_key
-      | true -> 
-        (* NOTE arr[lo] <= key *)
-        (* trivial case: arr[hi] <= key; then within the range lo,hi the nearest leq entry
-           is at index hi *)
-        match get arr hi <= key with
-        | true -> `Some hi
-        | false -> 
-          (* NOTE key < arr[hi] *)
-          (lo,hi) |> iter_k (fun ~k:kont (lo,hi) -> 
-              (* loop invariants *)
-              assert(get arr lo <= key && key < get arr hi);
-              assert(lo < hi); (* follows from arr[lo] <= key < arr[hi] *)
-              match lo+1 = hi with 
-              | true -> `Some lo
-              | false -> 
-                (* NOTE at least one entry between arr[lo] and arr[hi] *)
-                assert(lo+2 <= hi);
-                let mid = (lo+hi)/2 in
-                let arr_mid = get arr mid in
-                match arr_mid <= key with 
-                | true -> kont (mid,hi)
-                | false -> 
-                  (* NOTE we can't call kont with mid-1 because we need the loop invariant
-                     (key < arr[hi]) to hold *)
-                  kont (lo,mid))
+      | false ->
+          (* trivial case: arr[lo] > key; so all arr entries greater than key, since arr is
+             sorted *)
+          `All_gt_key
+      | true -> (
+          (* NOTE arr[lo] <= key *)
+          (* trivial case: arr[hi] <= key; then within the range lo,hi the nearest leq entry
+             is at index hi *)
+          match get arr hi <= key with
+          | true -> `Some hi
+          | false ->
+              (* NOTE key < arr[hi] *)
+              (lo, hi)
+              |> iter_k (fun ~k:kont (lo, hi) ->
+                     (* loop invariants *)
+                     assert (get arr lo <= key && key < get arr hi);
+                     assert (lo < hi);
+                     (* follows from arr[lo] <= key < arr[hi] *)
+                     match lo + 1 = hi with
+                     | true -> `Some lo
+                     | false -> (
+                         (* NOTE at least one entry between arr[lo] and arr[hi] *)
+                         assert (lo + 2 <= hi);
+                         let mid = (lo + hi) / 2 in
+                         let arr_mid = get arr mid in
+                         match arr_mid <= key with
+                         | true -> kont (mid, hi)
+                         | false ->
+                             (* NOTE we can't call kont with mid-1 because we need the loop invariant
+                                (key < arr[hi]) to hold *)
+                             kont (lo, mid))))
 
-    (* FIXME move to test directory *)
-    let _test_nearest_leq () = 
-      let arr = Array.of_list [1;3;5;7] in
+    (* TODO move to test directory *)
+    let _test_nearest_leq () =
+      let arr = Array.of_list [ 1; 3; 5; 7 ] in
       let get arr i = arr.(i) in
-      let lo,hi = 0,Array.length arr -1 in
+      let lo, hi = (0, Array.length arr - 1) in
       let nearest_leq_ key = nearest_leq ~arr ~get ~lo ~hi ~key in
-      assert(nearest_leq_ 0 = `All_gt_key); 
-      assert(nearest_leq_ 1 = `Some 0);
-      assert(nearest_leq_ 2 = `Some 0);
-      assert(nearest_leq_ 3 = `Some 1);
-      assert(nearest_leq_ 3 = `Some 1);
-      assert(nearest_leq_ 4 = `Some 1);
-      assert(nearest_leq_ 5 = `Some 2);
-      assert(nearest_leq_ 6 = `Some 2);
-      assert(nearest_leq_ 7 = `Some 3);
-      assert(nearest_leq_ 8 = `Some 3);
-      assert(nearest_leq_ 100 = `Some 3);
+      assert (nearest_leq_ 0 = `All_gt_key);
+      assert (nearest_leq_ 1 = `Some 0);
+      assert (nearest_leq_ 2 = `Some 0);
+      assert (nearest_leq_ 3 = `Some 1);
+      assert (nearest_leq_ 3 = `Some 1);
+      assert (nearest_leq_ 4 = `Some 1);
+      assert (nearest_leq_ 5 = `Some 2);
+      assert (nearest_leq_ 6 = `Some 2);
+      assert (nearest_leq_ 7 = `Some 3);
+      assert (nearest_leq_ 8 = `Some 3);
+      assert (nearest_leq_ 100 = `Some 3);
       ()
 
-    (** [find_nearest_leq ~mapping off] returns the entry in [mapping] whose offset is the
-        nearest [<=] the given [off] *)
-    let find_nearest_leq ~(mapping:mapping) off =
-      match mapping with 
-      | Mapping arr -> 
-        match Array.length arr with
-        | 0 -> 
-          (* NOTE this is probably an error case; perhaps log an error *)
-          ignore(Stdlib.exit (-1));
-          None
-        | len -> 
-          let get arr i = arr.(i).(0) in
-          match nearest_leq ~arr ~get ~lo:0 ~hi:(len-1) ~key:(Int63.to_int off) with
-          | `All_gt_key -> None
-          | `Some i -> 
-            let off, poff, len = arr.(i).(0), arr.(i).(1), arr.(i).(2) in
-            Some { off=Int63.of_int off; poff=Int63.of_int poff; len }
-          
+    (** [find_nearest_leq ~mapping off] returns the entry in [mapping] whose
+        offset is the nearest [<=] the given [off] *)
+    let find_nearest_leq ~(mapping : mapping) off =
+      match mapping with
+      | Mapping arr -> (
+          match BigArr1.dim arr with
+          | 0 ->
+            (* NOTE this is probably an error case; perhaps log an error *)
+            [%log.warn "%s: mapping array had 0 length; this is probably an error" __FILE__];
+              None
+          | len -> (
+              assert (len mod 3 = 0);
+              (* see invariant-mapping-array *)
+              let actual_len = len / 3 in
+              (* see invariant-mapping-array: we want to perform binary search wrt. the
+                 first int in each consecutive triple *)
+              let get arr i = arr.{i * 3} in
+              match
+                nearest_leq ~arr ~get ~lo:0 ~hi:(actual_len - 1)
+                  ~key:(Int63.to_int off)
+              with
+              | `All_gt_key -> None
+              | `Some i ->
+                  (* NOTE the i returned is as seen via [get] above, i.e., we need to multiply
+                     by 3 to get the actual index in the array *)
+                  let off, poff, len =
+                    (arr.{3 * i}, arr.{(3 * i) + 1}, arr.{(3 * i) + 2})
+                  in
+                  Some { off = Int63.of_int off; poff = Int63.of_int poff; len }
+              ))
   end
 
   type t = { fm : Fm.t; mutable mapping : mapping; root : string }
   (** [mapping] is a map from global offset to (offset,len) pairs in the prefix
       file *)
 
-  let empty_mapping = Mapping (Array.make_matrix 0 3 0)
+  let empty_mapping = Mapping Bigarray.(Array1.create int c_layout 0)
 
   let load_mapping path =
     let arr = Mapping_file.load_mapping_as_mmap path in
-    (* NOTE arr is an array of pairs (off,len); so the size needs to be adjusted by /2 in
-       the following line *)
-    let mapping = Array.make_matrix ((BigArr1.dim arr) / 2) 3 0 in
-    let poff = ref 0 in
-    let idx = ref 0 in
-    let f ~off ~len =
-      let off = Int63.to_int off in
-      (* We want to map off to poff,len *)
-      mapping.(!idx).(0) <- off;
-      mapping.(!idx).(1) <- !poff;
-      mapping.(!idx).(2) <- len;
-      poff := !poff + len;
-      incr idx;
-      ()
-    in
-    Mapping_file.iter_mmap arr f;
-    Ok (Mapping mapping)
-
+    (* NOTE arr is an array of tuples (off,poff,len); see invariant-mapping-array *)
+    Ok (Mapping arr)
 
   let reload t =
     let open Result_syntax in
     let* mapping =
       match Fm.mapping t.fm with
-      | None -> Ok empty_mapping (* presumably not used *)
+      | None -> 
+        Ok empty_mapping 
+      (* presumably this mapping is not used subsequently, i.e., the suffix file starts
+         from virtual offset 0, and the prefix will never be inspected *)
       | Some path -> load_mapping path
     in
     t.mapping <- mapping;
@@ -221,8 +215,8 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
             Int63.pp off_start
         in
         raise (Errors.Pack_error (`Invalid_read_of_gced_object s))
-    | Some (entry: Mapping_util.entry) ->
-      let chunk_off_start = entry.off in
+    | Some (entry : Mapping_util.entry) ->
+        let chunk_off_start = entry.off in
         assert (chunk_off_start <= off_start);
         let chunk_len = entry.len in
         let chunk_off_end = chunk_off_start + of_int chunk_len in

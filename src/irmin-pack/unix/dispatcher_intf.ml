@@ -52,7 +52,8 @@ module type S = sig
       prefix, it will read the remaining in the prefix. *)
 
   type mapping
-  (** [mapping] is a map from global offset to [(offset,len)] pairs in the prefix file *)
+  (** [mapping] implements a map from global offset to [(offset,len)] in the
+      prefix file *)
 
   val load_mapping : string -> (mapping, [> Fm.Errs.t ]) result
   (** [load_mapping path] loads the [mapping] from the given path and returns it *)

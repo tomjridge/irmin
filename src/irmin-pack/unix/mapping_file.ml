@@ -366,9 +366,15 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) = struct
     end in
     let file2 = Stdlib.open_out_bin path2 in
     (* Fill and close [file2] *)
+    let poff = ref 0 in
+    (* offset in prefix file *)
     let register_entry ~off ~len =
+      (* NOTE mmap-contents: the order of ints that are output: the virtual offset, the
+         offset-in-prefix and the length; this is used when the file is read back in *)
       Util.output_int_ne file2 off;
+      Util.output_int_ne file2 !poff;
       Util.output_int_ne file2 len;
+      poff := !poff + len;
       ()
     in
     let* () =
@@ -387,16 +393,17 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) = struct
   let load_mapping_as_mmap path =
     let mmap = Int_mmap.open_ ~fn:path ~sz:(-1) in
     let arr = mmap.arr in
-    (* we expect the arr to hold (off,len) pairs, so size should be even *)
-    assert (BigArr1.dim arr mod 2 = 0);
+    (* we expect the arr to hold (off,poff,len) pairs, hence following assert *)
+    assert (BigArr1.dim arr mod 3 = 0);
     Int_mmap.close mmap;
     arr
 
   let iter_mmap arr f =
     let sz = BigArr1.dim arr in
-    assert (sz mod 2 = 0);
-    for i = 0 to (sz / 2) - 1 do
-      f ~off:(arr.{2 * i} |> Int63.of_int) ~len:arr.{(2 * i) + 1}
+    assert (sz mod 3 = 0);
+    for i = 0 to (sz / 3) - 1 do
+      (* see note mmap-contents above: every 3 ints corresponds to (off,poff,len) *)
+      f ~off:(arr.{3 * i} |> Int63.of_int) ~len:arr.{(3 * i) + 2}
     done;
     ()
 end
