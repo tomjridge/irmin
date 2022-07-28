@@ -415,9 +415,10 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) = struct
     let sz = BigArr1.dim arr in
     assert (sz mod 3 = 0);
     (* guaranteed by type [mapping_as_int_bigarray] *)
-    for i = 0 to (sz / 3) - 1 do
-      (* see note mmap-contents above: every 3 ints corresponds to (off,poff,len) *)
-      f ~off:(arr.{3 * i} |> Int63.of_int) ~len:arr.{(3 * i) + 2}
-    done;
-    ()
+    Errs.catch (fun () ->
+        for i = 0 to (sz / 3) - 1 do
+          (* see note mmap-contents above: every 3 ints corresponds to (off,poff,len) *)
+          f ~off:(arr.{3 * i} |> Int63.of_int) ~len:arr.{(3 * i) + 2}
+        done;
+        ())
 end

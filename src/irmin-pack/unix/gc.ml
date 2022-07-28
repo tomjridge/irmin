@@ -307,7 +307,7 @@ module Make (Args : Args) : S with module Args := Args = struct
           let len = Int63.of_int len in
           transfer_append_exn ~read_exn ~append_exn ~off ~len buffer
         in
-        let () = Mapping_file.iter_mmap mapping f in
+        let* () = Mapping_file.iter_mmap mapping f in
         Ao.flush prefix
       in
       (* Step 5.2. Transfer again the parent commits but with a modified

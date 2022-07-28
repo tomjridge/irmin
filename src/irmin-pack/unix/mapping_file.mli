@@ -36,13 +36,13 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) : sig
 
   type mapping_as_int_bigarray = private
     | Int_bigarray of int_bigarray
-        (** [mapping_as_int_bigarray] holds the [int_bigarray] loaded from an mmap. NOTE
-            invariant-mapping-array: The [int_bigarray] holds ints; each consecutive group
-            of 3 ints corresponds to a tuple [(off,poff,len)], where [off] is the virtual
-            offset; [poff] is the offset in the prefix file; and [len] is the length of
-            the corresponding chunk in the prefix file. The size of the array is always a
-            multiple of 3. *)
-
+        (** [mapping_as_int_bigarray] holds the [int_bigarray] loaded from an
+            mmap. NOTE invariant-mapping-array: The [int_bigarray] holds ints;
+            each consecutive group of 3 ints corresponds to a tuple
+            [(off,poff,len)], where [off] is the virtual offset; [poff] is the
+            offset in the prefix file; and [len] is the length of the
+            corresponding chunk in the prefix file. The size of the array is
+            always a multiple of 3. *)
 
   val empty_mapping : mapping_as_int_bigarray
 
@@ -55,8 +55,17 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) : sig
       of data, and [len] is the length of the region *)
 
   val iter_mmap :
-    mapping_as_int_bigarray -> (off:int63 -> len:int -> unit) -> unit
+    mapping_as_int_bigarray ->
+    (off:int63 -> len:int -> unit) ->
+    (unit, [> Errs.t ]) result
   (** [iter_mmap arr f] calls [f] on each [(off,len)] pair in [arr], starting
       from the beginning of [arr]. This is a common pattern in the rest of the
-      code, so exposed as a helper function here. *)
+      code, so exposed as a helper function here.
+
+      It is guaranteed for the offsets to be iterated in monotonic order.
+
+      It is guaranteed that entries don't overlap.
+
+      The exceptions raised by [f] are caught and returned (as long as they are
+      known by [Errs]). *)
 end
