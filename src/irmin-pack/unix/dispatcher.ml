@@ -40,62 +40,7 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
     (** [entry] is a type for the return value from {!find_nearest_leq}; see doc
         for {!type:mapping} above. *)
 
-    (** [nearest_leq ~arr ~get ~lo ~hi ~key] returns the nearest entry in the
-        sorted [arr] that is [<=] the given key. Routine is based on binary
-        search. *)
-    let nearest_leq ~arr ~get ~lo ~hi ~key =
-      assert (lo <= hi);
-      match get arr lo <= key with
-      | false ->
-          (* trivial case: arr[lo] > key; so all arr entries greater than key, since arr is
-             sorted *)
-          `All_gt_key
-      | true -> (
-          (* NOTE arr[lo] <= key *)
-          (* trivial case: arr[hi] <= key; then within the range lo,hi the nearest leq entry
-             is at index hi *)
-          match get arr hi <= key with
-          | true -> `Some hi
-          | false ->
-              (* NOTE key < arr[hi] *)
-              (lo, hi)
-              |> iter_k (fun ~k:kont (lo, hi) ->
-                     (* loop invariants *)
-                     assert (get arr lo <= key && key < get arr hi);
-                     assert (lo < hi);
-                     (* follows from arr[lo] <= key < arr[hi] *)
-                     match lo + 1 = hi with
-                     | true -> `Some lo
-                     | false -> (
-                         (* NOTE at least one entry between arr[lo] and arr[hi] *)
-                         assert (lo + 2 <= hi);
-                         let mid = (lo + hi) / 2 in
-                         let arr_mid = get arr mid in
-                         match arr_mid <= key with
-                         | true -> kont (mid, hi)
-                         | false ->
-                             (* NOTE we can't call kont with mid-1 because we need the loop invariant
-                                (key < arr[hi]) to hold *)
-                             kont (lo, mid))))
-
-    (* TODO move to test directory *)
-    let _test_nearest_leq () =
-      let arr = Array.of_list [ 1; 3; 5; 7 ] in
-      let get arr i = arr.(i) in
-      let lo, hi = (0, Array.length arr - 1) in
-      let nearest_leq_ key = nearest_leq ~arr ~get ~lo ~hi ~key in
-      assert (nearest_leq_ 0 = `All_gt_key);
-      assert (nearest_leq_ 1 = `Some 0);
-      assert (nearest_leq_ 2 = `Some 0);
-      assert (nearest_leq_ 3 = `Some 1);
-      assert (nearest_leq_ 3 = `Some 1);
-      assert (nearest_leq_ 4 = `Some 1);
-      assert (nearest_leq_ 5 = `Some 2);
-      assert (nearest_leq_ 6 = `Some 2);
-      assert (nearest_leq_ 7 = `Some 3);
-      assert (nearest_leq_ 8 = `Some 3);
-      assert (nearest_leq_ 100 = `Some 3);
-      ()
+    let nearest_leq = Utils.nearest_leq
 
     (** [find_nearest_leq ~mapping off] returns the entry in [mapping] whose
         offset is the nearest [<=] the given [off] *)

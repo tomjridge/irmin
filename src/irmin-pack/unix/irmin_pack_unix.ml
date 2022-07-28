@@ -30,6 +30,7 @@ module Control_file = Control_file
 module Append_only_file = Append_only_file
 module File_manager = File_manager
 module Maker = Ext.Maker
+module Utils = Utils
 
 module KV (Config : Irmin_pack.Conf.S) = struct
   type endpoint = unit
