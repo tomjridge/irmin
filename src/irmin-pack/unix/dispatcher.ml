@@ -142,7 +142,8 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   let empty_mapping = Mapping Bigarray.(Array1.create int c_layout 0)
 
   let load_mapping path =
-    let arr = Mapping_file.load_mapping_as_mmap path in
+    let open Result_syntax in
+    let* arr = Mapping_file.load_mapping_as_mmap path in
     (* NOTE arr is an array of tuples (off,poff,len); see invariant-mapping-array *)
     Ok (Mapping arr)
 

@@ -34,7 +34,7 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) : sig
       Creates temporary files in [root] that are unlinked before the function
       returns. *)
 
-  val load_mapping_as_mmap : string -> int_bigarray
+  val load_mapping_as_mmap : string -> (int_bigarray, [> Errs.t]) result
   (** [load_mapping_as_mmap path] returns an mmap-backed [int_bigarray]; assuming the path
       is for a mapping file previously created via [create], the array should hold triples
       of [(off,poff,len)] data, where [off] is a virtual offset, [poff] is an offset in

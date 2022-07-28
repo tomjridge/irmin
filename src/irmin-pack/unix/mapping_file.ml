@@ -396,7 +396,7 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) = struct
     (* we expect the arr to hold (off,poff,len) pairs, hence following assert *)
     assert (BigArr1.dim arr mod 3 = 0);
     Int_mmap.close mmap;
-    arr
+    Ok arr (* FIXME add proper error checking *)
 
   let iter_mmap arr f =
     let sz = BigArr1.dim arr in

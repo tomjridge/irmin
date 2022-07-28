@@ -276,7 +276,7 @@ module Make (Args : Args) : S with module Args := Args = struct
     in
 
     let mapping_path = Irmin_pack.Layout.V3.mapping ~root ~generation in
-    let mapping = Mapping_file.load_mapping_as_mmap mapping_path in
+    let* mapping = Mapping_file.load_mapping_as_mmap mapping_path in
     let* () =
       (* Step 4. Create the new prefix. *)
       let prefix_ref = ref None in
