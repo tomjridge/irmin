@@ -33,13 +33,7 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   let read_prefix = ref 0
   (*TODO move them in stats*)
 
-  type mapping =
-    | Mapping of Mapping_file.mapping_as_int_bigarray
-        (** NOTE invariant-mapping-array: The [int_bigarray] holds ints; each
-            consecutive group of 3 ints corresponds to a tuple [(off,poff,len)],
-            where [off] is the virtual offset; [poff] is the offset in the
-            prefix file; and [len] is the length of the corresponding chunk in
-            the prefix file. The size of the array is always a multiple of 3. *)
+  type mapping = Mapping_file.mapping_as_int_bigarray
 
   module Mapping_util = struct
     type entry = { off : int63; poff : int63; len : int }
@@ -107,7 +101,7 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
         offset is the nearest [<=] the given [off] *)
     let find_nearest_leq ~(mapping : mapping) off =
       match mapping with
-      | Mapping (Int_bigarray arr) -> (
+      | Int_bigarray arr -> (
           match BigArr1.dim arr with
           | 0 ->
               (* NOTE this is probably an error case; perhaps log an error *)
@@ -141,13 +135,13 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   (** [mapping] is a map from global offset to (offset,len) pairs in the prefix
       file *)
 
-  let empty_mapping = Mapping Mapping_file.empty_mapping
+  let empty_mapping = Mapping_file.empty_mapping
 
   let load_mapping path =
     let open Result_syntax in
     let* arr = Mapping_file.load_mapping_as_mmap path in
     (* NOTE arr is an array of tuples (off,poff,len); see invariant-mapping-array *)
-    Ok (Mapping arr)
+    Ok arr
 
   let reload t =
     let open Result_syntax in

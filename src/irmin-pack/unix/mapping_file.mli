@@ -36,9 +36,13 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) : sig
 
   type mapping_as_int_bigarray = private
     | Int_bigarray of int_bigarray
-        (** [mapping_as_int_bigarray] holds the [int_bigarray] loaded from an
-            mmap. It is guaranteed that the length of the array is a multiple of
-            3. *)
+        (** [mapping_as_int_bigarray] holds the [int_bigarray] loaded from an mmap. NOTE
+            invariant-mapping-array: The [int_bigarray] holds ints; each consecutive group
+            of 3 ints corresponds to a tuple [(off,poff,len)], where [off] is the virtual
+            offset; [poff] is the offset in the prefix file; and [len] is the length of
+            the corresponding chunk in the prefix file. The size of the array is always a
+            multiple of 3. *)
+
 
   val empty_mapping : mapping_as_int_bigarray
 
