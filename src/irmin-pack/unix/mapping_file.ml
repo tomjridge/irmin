@@ -391,12 +391,18 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) = struct
     Ok ()
 
   let load_mapping_as_mmap path =
-    let mmap = Int_mmap.open_ ~fn:path ~sz:(-1) in
-    let arr = mmap.arr in
-    (* we expect the arr to hold (off,poff,len) pairs, hence following assert *)
-    assert (BigArr1.dim arr mod 3 = 0);
-    Int_mmap.close mmap;
-    Ok arr (* FIXME add proper error checking *)
+    match Io.Unix.classify_path path with
+    | `File -> (
+      let mmap = Int_mmap.open_ ~fn:path ~sz:(-1) in
+      let arr = mmap.arr in
+      (* we expect the arr to hold (off,poff,len) tuples *)
+      match BigArr1.dim arr mod 3 = 0 with
+      | true -> 
+        Int_mmap.close mmap;
+        Ok arr 
+      | false -> 
+        Error (`Corrupted_mapping_file (__FILE__^": mapping mmap size was not a multiple of 3")))
+    | _ -> Error `No_such_file_or_directory          
 
   let iter_mmap arr f =
     let sz = BigArr1.dim arr in
