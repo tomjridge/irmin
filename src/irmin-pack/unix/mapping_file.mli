@@ -34,13 +34,24 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) : sig
       Creates temporary files in [root] that are unlinked before the function
       returns. *)
 
-  val load_mapping_as_mmap : string -> (int_bigarray, [> Errs.t]) result
-  (** [load_mapping_as_mmap path] returns an mmap-backed [int_bigarray]; assuming the path
-      is for a mapping file previously created via [create], the array should hold triples
-      of [(off,poff,len)] data, where [off] is a virtual offset, [poff] is an offset in
-      the prefix file for a live region of data, and [len] is the length of the region *)
+  type mapping_as_int_bigarray = private
+    | Int_bigarray of int_bigarray
+        (** [mapping_as_int_bigarray] holds the [int_bigarray] loaded from an
+            mmap. It is guaranteed that the length of the array is a multiple of
+            3. *)
 
-  val iter_mmap : int_bigarray -> (off:int63 -> len:int -> unit) -> unit
+  val empty_mapping : mapping_as_int_bigarray
+
+  val load_mapping_as_mmap :
+    string -> (mapping_as_int_bigarray, [> Errs.t ]) result
+  (** [load_mapping_as_mmap path] returns an mmap-backed [int_bigarray];
+      assuming the path is for a mapping file previously created via [create],
+      the array should hold triples of [(off,poff,len)] data, where [off] is a
+      virtual offset, [poff] is an offset in the prefix file for a live region
+      of data, and [len] is the length of the region *)
+
+  val iter_mmap :
+    mapping_as_int_bigarray -> (off:int63 -> len:int -> unit) -> unit
   (** [iter_mmap arr f] calls [f] on each [(off,len)] pair in [arr], starting
       from the beginning of [arr]. This is a common pattern in the rest of the
       code, so exposed as a helper function here. *)

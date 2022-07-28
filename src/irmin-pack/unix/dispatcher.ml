@@ -34,17 +34,17 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   (*TODO move them in stats*)
 
   type mapping =
-    | Mapping of int_bigarray
-        (** NOTE invariant-mapping-array: The [int_bigarray] holds ints; each consecutive
-            group of 3 ints corresponds to a tuple [(off,poff,len)], where [off] is the
-            virtual offset; [poff] is the offset in the prefix file; and [len] is the
-            length of the corresponding chunk in the prefix file. The size of the array is
-            always a multiple of 3. *)
+    | Mapping of Mapping_file.mapping_as_int_bigarray
+        (** NOTE invariant-mapping-array: The [int_bigarray] holds ints; each
+            consecutive group of 3 ints corresponds to a tuple [(off,poff,len)],
+            where [off] is the virtual offset; [poff] is the offset in the
+            prefix file; and [len] is the length of the corresponding chunk in
+            the prefix file. The size of the array is always a multiple of 3. *)
 
   module Mapping_util = struct
     type entry = { off : int63; poff : int63; len : int }
-    (** [entry] is a type for the return value from {!find_nearest_leq}; see doc for
-        {!type:mapping} above. *)
+    (** [entry] is a type for the return value from {!find_nearest_leq}; see doc
+        for {!type:mapping} above. *)
 
     (** [nearest_leq ~arr ~get ~lo ~hi ~key] returns the nearest entry in the
         sorted [arr] that is [<=] the given key. Routine is based on binary
@@ -107,11 +107,13 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
         offset is the nearest [<=] the given [off] *)
     let find_nearest_leq ~(mapping : mapping) off =
       match mapping with
-      | Mapping arr -> (
+      | Mapping (Int_bigarray arr) -> (
           match BigArr1.dim arr with
           | 0 ->
-            (* NOTE this is probably an error case; perhaps log an error *)
-            [%log.warn "%s: mapping array had 0 length; this is probably an error" __FILE__];
+              (* NOTE this is probably an error case; perhaps log an error *)
+              [%log.warn
+                "%s: mapping array had 0 length; this is probably an error"
+                  __FILE__];
               None
           | len -> (
               assert (len mod 3 = 0);
@@ -139,7 +141,7 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
   (** [mapping] is a map from global offset to (offset,len) pairs in the prefix
       file *)
 
-  let empty_mapping = Mapping Bigarray.(Array1.create int c_layout 0)
+  let empty_mapping = Mapping Mapping_file.empty_mapping
 
   let load_mapping path =
     let open Result_syntax in
@@ -151,8 +153,7 @@ module Make (Fm : File_manager.S with module Io = Io.Unix) :
     let open Result_syntax in
     let* mapping =
       match Fm.mapping t.fm with
-      | None -> 
-        Ok empty_mapping 
+      | None -> Ok empty_mapping
       (* presumably this mapping is not used subsequently, i.e., the suffix file starts
          from virtual offset 0, and the prefix will never be inspected *)
       | Some path -> load_mapping path

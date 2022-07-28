@@ -390,23 +390,31 @@ module Make (Errs : Io_errors.S with module Io = Io.Unix) = struct
 
     Ok ()
 
+  type mapping_as_int_bigarray = Int_bigarray of int_bigarray
+
+  let empty_mapping = Int_bigarray Bigarray.(Array1.create int c_layout 0)
+
   let load_mapping_as_mmap path =
     match Io.Unix.classify_path path with
     | `File -> (
-      let mmap = Int_mmap.open_ ~fn:path ~sz:(-1) in
-      let arr = mmap.arr in
-      (* we expect the arr to hold (off,poff,len) tuples *)
-      match BigArr1.dim arr mod 3 = 0 with
-      | true -> 
-        Int_mmap.close mmap;
-        Ok arr 
-      | false -> 
-        Error (`Corrupted_mapping_file (__FILE__^": mapping mmap size was not a multiple of 3")))
-    | _ -> Error `No_such_file_or_directory          
+        let mmap = Int_mmap.open_ ~fn:path ~sz:(-1) in
+        let arr = mmap.arr in
+        (* we expect the arr to hold (off,poff,len) tuples *)
+        match BigArr1.dim arr mod 3 = 0 with
+        | true ->
+            (* we guarantee that the size of the arr is a multiple of 3 *)
+            Int_mmap.close mmap;
+            Ok (Int_bigarray arr)
+        | false ->
+            Error
+              (`Corrupted_mapping_file
+                (__FILE__ ^ ": mapping mmap size was not a multiple of 3")))
+    | _ -> Error `No_such_file_or_directory
 
-  let iter_mmap arr f =
+  let iter_mmap (Int_bigarray arr) f =
     let sz = BigArr1.dim arr in
     assert (sz mod 3 = 0);
+    (* guaranteed by type [mapping_as_int_bigarray] *)
     for i = 0 to (sz / 3) - 1 do
       (* see note mmap-contents above: every 3 ints corresponds to (off,poff,len) *)
       f ~off:(arr.{3 * i} |> Int63.of_int) ~len:arr.{(3 * i) + 2}
